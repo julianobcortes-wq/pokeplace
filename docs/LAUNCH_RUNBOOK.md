@@ -34,7 +34,7 @@ Webhook: `POST {APP_PUBLIC_URL}/api/mercadopago/webhook`
 
 Cadastro → admin aprova loja → anúncio → carrinho → Mercado Pago → envio → recebimento → avaliação → saque Pix.
 
-Sandbox `Pagar (simulação)` continua disponível sem MP.
+Pagamento de teste para compradores está desativado. Pedido só vira `paid` via webhook verificado do Mercado Pago.
 
 ## 6. Depois
 

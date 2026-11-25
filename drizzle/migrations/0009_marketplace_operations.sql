@@ -136,15 +136,14 @@ begin
   return v_order;
 end $function$;
 
--- Test payment confirmation (sandbox only; real payments confirmed by provider webhook)
+-- Test payment confirmation is disabled for buyers. Real paid status comes only from
+-- a verified Mercado Pago webhook (or an explicit ops path with service_role).
 CREATE OR REPLACE FUNCTION public.confirm_test_payment(_order_id uuid) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
 BEGIN
-  IF NOT public.is_order_buyer(_order_id) THEN RAISE EXCEPTION 'Pedido não encontrado'; END IF;
-  UPDATE public.orders SET status='paid', expires_at=NULL WHERE id=_order_id AND status='awaiting_payment' AND expires_at > now();
-  IF NOT FOUND THEN RAISE EXCEPTION 'Pedido expirado ou já pago'; END IF;
-  UPDATE public.payments SET status='succeeded' WHERE order_id=_order_id AND environment='sandbox';
+  RAISE EXCEPTION 'Pagamento de teste desativado. Use Mercado Pago.';
 END $$;
-GRANT EXECUTE ON FUNCTION public.confirm_test_payment(uuid) TO authenticated;
+REVOKE ALL ON FUNCTION public.confirm_test_payment(uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.confirm_test_payment(uuid) TO service_role;
 
 -- Disputes
 CREATE TABLE public.disputes (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), order_item_id uuid NOT NULL UNIQUE REFERENCES public.order_items(id), order_id uuid NOT NULL REFERENCES public.orders(id), buyer_id uuid NOT NULL, seller_id uuid NOT NULL REFERENCES public.sellers(id),

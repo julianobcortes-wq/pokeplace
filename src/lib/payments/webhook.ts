@@ -1,22 +1,24 @@
-import { fetchMercadoPagoPayment, verifyWebhookSecret } from "./mercadopago";
+import { fetchMercadoPagoPayment, verifyMercadoPagoWebhook } from "./mercadopago";
 
 export async function handleMercadoPagoWebhook(request: Request): Promise<Response> {
-  if (!verifyWebhookSecret(request)) {
-    return new Response("unauthorized", { status: 401 });
-  }
-
   let paymentId: string | null = null;
   const url = new URL(request.url);
   paymentId = url.searchParams.get("data.id") || url.searchParams.get("id");
 
+  let body: { data?: { id?: string | number }; id?: string | number; type?: string; action?: string } | null = null;
   try {
-    const body = await request.json() as { data?: { id?: string | number }; id?: string | number; type?: string; action?: string };
-    if (!paymentId) paymentId = body.data?.id != null ? String(body.data.id) : body.id != null ? String(body.id) : null;
-    if (body.type && body.type !== "payment" && body.action && !String(body.action).includes("payment")) {
-      return new Response(JSON.stringify({ ignored: true }), { status: 200, headers: { "content-type": "application/json" } });
-    }
+    body = (await request.json()) as typeof body;
+    if (!paymentId) paymentId = body?.data?.id != null ? String(body.data.id) : body?.id != null ? String(body.id) : null;
   } catch {
     // query-only notifications are fine
+  }
+
+  if (!(await verifyMercadoPagoWebhook(request, paymentId))) {
+    return new Response("unauthorized", { status: 401 });
+  }
+
+  if (body?.type && body.type !== "payment" && body.action && !String(body.action).includes("payment")) {
+    return new Response(JSON.stringify({ ignored: true }), { status: 200, headers: { "content-type": "application/json" } });
   }
 
   if (!paymentId) {
@@ -46,7 +48,6 @@ export async function handleMercadoPagoWebhook(request: Request): Promise<Respon
       _external_id: String(payment.id),
     });
     if (error) {
-      // Fallback when RPC not applied yet: direct updates with service role.
       const amount = payment.transaction_amount ?? 0;
       await supabaseAdmin.from("orders").update({ status: "paid", expires_at: null }).eq("id", orderId).eq("status", "awaiting_payment");
       const { data: existing } = await supabaseAdmin.from("payments").select("id").eq("order_id", orderId).limit(1);

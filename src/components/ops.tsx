@@ -96,11 +96,10 @@ export function ListingQuestions({ cardId, listings }: { cardId: string; listing
 /* ---------- Comprador: ações no pedido ---------- */
 type Item = { id: string; status: string; seller_id: string; delivered_at: string | null; cards?: { name: string } | null };
 
-export function OrderBuyerActions({ order, items, sandbox }: { order: { id: string; status: string; expires_at: string | null }; items: Item[]; sandbox: boolean }) {
+export function OrderBuyerActions({ order, items }: { order: { id: string; status: string; expires_at: string | null }; items: Item[]; sandbox?: boolean }) {
   const qc = useQueryClient();
   const [paying, setPaying] = useState(false);
   const refresh = () => qc.invalidateQueries({ queryKey: ["order"] });
-  const paySandbox = async () => { if (err((await supabase.rpc("confirm_test_payment", { _order_id: order.id })).error, "Pagamento de teste confirmado")) refresh(); };
   const payMercadoPago = async () => {
     setPaying(true);
     try {
@@ -119,7 +118,6 @@ export function OrderBuyerActions({ order, items, sandbox }: { order: { id: stri
       {order.status === "awaiting_payment" && (
         <Button onClick={payMercadoPago} disabled={paying}>{paying ? "Abrindo Mercado Pago…" : "Pagar com Mercado Pago"}</Button>
       )}
-      {order.status === "awaiting_payment" && sandbox && <Button variant="outline" onClick={paySandbox}>Pagar (simulação de teste)</Button>}
       {order.status === "awaiting_payment" && order.expires_at && <p className="text-xs text-muted-foreground">Cartas reservadas até {new Date(order.expires_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}. Sem pagamento, voltam para a vitrine.</p>}
       {canCancel && <Button variant="outline" onClick={cancel}>Cancelar pedido</Button>}
     </div>
