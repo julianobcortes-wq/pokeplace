@@ -1,9 +1,10 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { PageShell } from "@/components/SiteHeader";
 import { Button } from "@/components/ui/button";
 import { BRAND } from "@/lib/format";
+import { useAuth } from "@/hooks/useAuth";
 import {
   connectSellerChannel,
   disconnectSellerChannel,
@@ -11,6 +12,7 @@ import {
   syncSellerCatalog,
   syncSellerOrders,
 } from "@/lib/channels/functions";
+import { listSnapshots } from "@/lib/channels/hub";
 import type { ChannelSnapshot } from "@/lib/channels/types";
 
 export const Route = createFileRoute("/canais")({
@@ -18,7 +20,7 @@ export const Route = createFileRoute("/canais")({
     seller: typeof search.seller === "string" && /^[a-zA-Z0-9_-]{1,80}$/.test(search.seller) ? search.seller : "loja-local",
   }),
   loaderDeps: ({ search }) => ({ seller: search.seller }),
-  loader: ({ deps }) => listChannelSnapshots({ data: { sellerId: deps.seller } }),
+  loader: ({ deps }) => listSnapshots(deps.seller),
   head: () => ({
     meta: [
       { title: `Canais | ${BRAND.name}` },
@@ -37,10 +39,19 @@ const STATUS: Record<string, string> = {
 function ChannelsPage() {
   const initial = Route.useLoaderData();
   const { seller } = Route.useSearch();
+  const { user, loading } = useAuth();
   const [rows, setRows] = useState<ChannelSnapshot[]>(initial);
   const [busy, setBusy] = useState<string | null>(null);
 
+  useEffect(() => {
+    setRows(listSnapshots(seller));
+  }, [seller]);
+
   const run = async (id: string, action: "connect" | "disconnect" | "catalog" | "orders") => {
+    if (!user) {
+      toast.error("Entre na conta para conectar canais");
+      return;
+    }
     setBusy(`${action}:${id}`);
     try {
       const data = { sellerId: seller, channelId: id };
@@ -64,8 +75,13 @@ function ChannelsPage() {
           <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
             Hub para ligar Mercado Livre, Shopee, Amazon, Magalu, Americanas, TikTok Shop, TCGplayer e novos canais no mesmo lugar.
             Esta versão não chama as APIs: conectar marca o canal como mock e a sincronização grava fixtures sintéticas na memória do processo.
-            Loja local: <b>{seller}</b>.
+            Loja: <b>{seller}</b>.
           </p>
+          {!loading && !user && (
+            <p className="mt-3 text-sm">
+              <Link to="/auth" className="text-primary font-semibold">Entre na conta</Link> para conectar ou sincronizar canais.
+            </p>
+          )}
         </section>
         <ul className="grid gap-3">
           {rows.map((channel) => {
@@ -81,12 +97,12 @@ function ChannelsPage() {
                   </div>
                   <div className="flex flex-wrap gap-2">
                     {on ? (
-                      <Button variant="outline" disabled={busy !== null} onClick={() => run(channel.id, "disconnect")}>Desconectar</Button>
+                      <Button variant="outline" disabled={busy !== null || !user} onClick={() => run(channel.id, "disconnect")}>Desconectar</Button>
                     ) : (
-                      <Button disabled={busy !== null} onClick={() => run(channel.id, "connect")}>Conectar</Button>
+                      <Button disabled={busy !== null || !user} onClick={() => run(channel.id, "connect")}>Conectar</Button>
                     )}
-                    <Button variant="secondary" disabled={!on || busy !== null} onClick={() => run(channel.id, "catalog")}>Sincronizar catálogo</Button>
-                    <Button variant="secondary" disabled={!on || busy !== null} onClick={() => run(channel.id, "orders")}>Sincronizar pedidos</Button>
+                    <Button variant="secondary" disabled={!on || busy !== null || !user} onClick={() => run(channel.id, "catalog")}>Sincronizar catálogo</Button>
+                    <Button variant="secondary" disabled={!on || busy !== null || !user} onClick={() => run(channel.id, "orders")}>Sincronizar pedidos</Button>
                   </div>
                 </div>
                 <dl className="mt-4 grid gap-2 text-sm sm:grid-cols-3">

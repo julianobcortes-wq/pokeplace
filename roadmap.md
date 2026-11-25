@@ -53,6 +53,6 @@
 - [x] Problemas/mediação, chat do pedido com bloqueio de contatos, perguntas públicas, denúncias
 - [x] Saldo da loja, saques por Pix aprovados pelo admin, regras operacionais configuráveis
 - [x] Notificações no site, Compra Garantida, termos/privacidade/regras (rascunho jurídico), exportar/excluir conta
-- [ ] Pagamento real (Stripe) — aguarda país/empresa e aprovação do cadastro de pagamento
+- [ ] Pagamento real (Mercado Pago) — Checkout/Pix + webhook; secrets no app
 - [ ] E-mails automáticos — aguardam domínio próprio de e-mail
 - [ ] Valores de comissão, prazos e planos — aguardam definição

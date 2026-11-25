@@ -12,9 +12,14 @@ async function upsert(table: string, rows: unknown[]) {
   if (!r.ok) throw new Error(`${table}: ${r.status} ${await r.text()}`);
 }
 
+const DEFAULT_SETS = [
+  "base1", "base2", "jungle", "fossil", "base3", "base4", "base5", "base6",
+  "swsh1", "swsh7", "swsh12pt5", "sv1", "sv3", "sv3pt5", "sv8", "sv8pt5",
+];
 const ids = process.argv.slice(2);
+const targets = ids.length ? ids : DEFAULT_SETS;
 const sets = (await (await fetch(`${BASE}/sets/en.json`)).json()) as any[];
-for (const id of ids) {
+for (const id of targets) {
   const s = sets.find((x) => x.id === id);
   if (!s) { console.error("set not found", id); continue; }
   await upsert("card_sets", [{ id, name: s.name, series: s.series, total: s.total, release_date: s.releaseDate.replaceAll("/", "-"), symbol_url: s.images.symbol, logo_url: s.images.logo }]);

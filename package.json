@@ -11,7 +11,10 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "catalog:import": "bun scripts/import-catalog.ts",
+    "prices:sync": "bun scripts/sync-prices.ts",
+    "db:apply": "bash scripts/apply-migrations.sh"
   },
   "overrides": {
     "rolldown": "1.2.1"

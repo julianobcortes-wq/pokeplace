@@ -50,6 +50,11 @@ function isH3SwallowedErrorBody(body: string): boolean {
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
     try {
+      const url = new URL(request.url);
+      if (url.pathname === "/api/mercadopago/webhook" && request.method === "POST") {
+        const { handleMercadoPagoWebhook } = await import("./lib/payments/webhook");
+        return await handleMercadoPagoWebhook(request);
+      }
       const handler = await getServerEntry();
       const response = await handler.fetch(request, env, ctx);
       return await normalizeCatastrophicSsrResponse(response);

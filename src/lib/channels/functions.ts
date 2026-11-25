@@ -8,9 +8,15 @@ const sellerInput = z.object({
 });
 
 const channelInput = z.object({
-  sellerId: z.string().uuid(),
+  sellerId: z.string().min(1).max(80).regex(/^[a-zA-Z0-9_-]+$/),
   channelId: z.string().min(1).max(40).regex(/^[a-z0-9_]+$/),
 });
+
+const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+async function assertSellerAccess(context: unknown, sellerId: string) {
+  if (uuidRe.test(sellerId)) await assertOwnsSeller(context, sellerId);
+}
 
 type Authed = { supabase: { from: (table: string) => any }; userId: string };
 
@@ -22,14 +28,18 @@ async function assertOwnsSeller(context: unknown, sellerId: string) {
 }
 
 export const listChannelSnapshots = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
   .inputValidator((d: { sellerId: string }) => sellerInput.parse(d))
-  .handler(async ({ data }) => listSnapshots(data.sellerId));
+  .handler(async ({ data, context }) => {
+    await assertSellerAccess(context, data.sellerId);
+    return listSnapshots(data.sellerId);
+  });
 
 export const connectSellerChannel = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: { sellerId: string; channelId: string }) => channelInput.parse(d))
   .handler(async ({ data, context }) => {
-    await assertOwnsSeller(context, data.sellerId);
+    await assertSellerAccess(context, data.sellerId);
     return connectChannel(data.sellerId, data.channelId);
   });
 
@@ -37,7 +47,7 @@ export const disconnectSellerChannel = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: { sellerId: string; channelId: string }) => channelInput.parse(d))
   .handler(async ({ data, context }) => {
-    await assertOwnsSeller(context, data.sellerId);
+    await assertSellerAccess(context, data.sellerId);
     return disconnectChannel(data.sellerId, data.channelId);
   });
 
@@ -45,7 +55,7 @@ export const syncSellerCatalog = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: { sellerId: string; channelId: string }) => channelInput.parse(d))
   .handler(async ({ data, context }) => {
-    await assertOwnsSeller(context, data.sellerId);
+    await assertSellerAccess(context, data.sellerId);
     return syncCatalog(data.sellerId, data.channelId);
   });
 
@@ -53,6 +63,6 @@ export const syncSellerOrders = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: { sellerId: string; channelId: string }) => channelInput.parse(d))
   .handler(async ({ data, context }) => {
-    await assertOwnsSeller(context, data.sellerId);
+    await assertSellerAccess(context, data.sellerId);
     return syncOrders(data.sellerId, data.channelId);
   });
