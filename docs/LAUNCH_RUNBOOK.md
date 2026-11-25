@@ -36,9 +36,20 @@ Cadastro → admin aprova loja → anúncio → carrinho → Mercado Pago → en
 
 Pagamento de teste para compradores está desativado. Pedido só vira `paid` via webhook verificado do Mercado Pago.
 
-## 6. Depois
+## 6. Sequência agora (Mercado Livre adiado)
+
+1. Colar `scripts/sql/all-migrations.sql` no SQL Editor do Supabase.
+2. Preencher secrets: `SUPABASE_SERVICE_ROLE_KEY`, `MP_*`, `APP_PUBLIC_URL`.
+3. `bun run catalog:import` → `bun run prices:sync`.
+4. `bootstrap-admin.sql` com o UUID do fundador.
+5. Testar: cadastro → aprovar loja → anunciar → Mercado Pago → envio → saque.
+
+Preço BR via Mercado Livre e OAuth dos canais ficam para depois do core.
+
+## 7. Depois do core
 
 - Resend (`RESEND_API_KEY`) para e-mails
+- API Mercado Livre (preço BRL sugerido)
 - OAuth real dos canais (hoje mock)
 - Melhor Envio / Correios
 - Revisão jurídica dos textos
