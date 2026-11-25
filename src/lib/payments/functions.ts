@@ -4,10 +4,7 @@ import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { createCheckoutPreference, mercadoPagoConfigured } from "./mercadopago";
 
 type Authed = {
-  supabase: {
-    from: (table: string) => any;
-    auth: { getUser: () => Promise<{ data: { user: { email?: string } | null } }> };
-  };
+  supabase: { from: (table: string) => any };
   userId: string;
 };
 
@@ -38,12 +35,10 @@ export const startMercadoPagoCheckout = createServerFn({ method: "POST" })
     if (order.status !== "awaiting_payment") throw new Error("Este pedido não aguarda pagamento");
 
     const amount = Number(order.subtotal) + Number(order.shipping_total ?? 0);
-    const { data: userData } = await ctx.supabase.auth.getUser();
     const pref = await createCheckoutPreference({
       orderId: order.id,
       title: `Pedido PokePlace #${order.id.slice(0, 8)}`,
       amount,
-      payerEmail: userData.user?.email,
     });
 
     await ctx.supabase
