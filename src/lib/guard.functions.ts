@@ -5,7 +5,7 @@ import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 type Authed = {
   supabase: {
     from: (table: string) => any;
-    rpc: (fn: string, args: Record<string, unknown>) => Promise<{ error: { message: string } | null }>;
+    rpc: (fn: string, args?: Record<string, unknown>) => Promise<{ data?: any; error: { message: string } | null }>;
   };
   userId: string;
 };
@@ -114,15 +114,42 @@ const listingPatch = z.object({
   status: z.enum(["active", "paused", "sold_out", "removed"]).optional(),
 }).refine((p) => p.price !== undefined || p.quantity !== undefined || p.status !== undefined, "Nada para atualizar");
 
+const adminSellerFields = "id,store_name,is_official,person_type,document,city,state,contact_email,status,operation_type,monthly_volume,categories,sales_history,phone,terms_accepted_at";
+
+export const listAdminSellers = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d: { status?: string }) => z.object({ status: sellerStatus.optional() }).parse(d ?? {}))
+  .handler(async ({ data, context }) => {
+    const ctx = auth(context);
+    await assertAdmin(ctx);
+    let sellersQuery = ctx.supabase.from("sellers").select(adminSellerFields).order("created_at", { ascending: false }).limit(100);
+    if (data.status) sellersQuery = sellersQuery.eq("status", data.status);
+    const [{ data: sellers, error: sellersError }, { data: logs, error: logsError }, { data: orders, error: ordersError }, { data: rate, error: rateError }] = await Promise.all([
+      sellersQuery,
+      ctx.supabase.from("seller_status_log").select("id,seller_id,from_status,to_status,note,created_at").order("created_at", { ascending: false }).limit(200),
+      ctx.supabase.rpc("get_marketplace_financials"),
+      ctx.supabase.from("platform_settings").select("value").eq("key", "commission_rate").maybeSingle(),
+    ]);
+    if (sellersError || logsError || ordersError || rateError) throw new Error("Acesso negado");
+    return { sellers: sellers ?? [], logs: logs ?? [], financials: orders?.[0] ?? null, rate: Number(rate?.value ?? 0) };
+  });
+
 export const updateOwnListing = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: { listingId: string; patch: { price?: number; quantity?: number; status?: string } }) =>
     z.object({ listingId: z.string().uuid(), patch: listingPatch }).parse(d))
   .handler(async ({ data, context }) => {
     const ctx = auth(context);
-    const { data: listing, error: readError } = await ctx.supabase.from("listings").select("id,seller_id").eq("id", data.listingId).maybeSingle();
+    const { data: listing, error: readError } = await ctx.supabase.from("listings").select("id,seller_id,status").eq("id", data.listingId).maybeSingle();
     if (readError || !listing) throw new Error("Anúncio não encontrado");
-    await assertOwnsSeller(ctx, listing.seller_id);
-    const { error } = await ctx.supabase.from("listings").update(data.patch).eq("id", data.listingId).eq("seller_id", listing.seller_id);
+    const { data: seller, error: sellerError } = await ctx.supabase.from("sellers").select("id,status").eq("id", listing.seller_id).eq("user_id", ctx.userId).maybeSingle();
+    if (sellerError || !seller) throw new Error("Acesso negado");
+    const nextStatus = data.patch.status ?? listing.status;
+    if (nextStatus === "active" && seller.status !== "approved") throw new Error("Acesso negado");
+    const { error } = await ctx.supabase.from("listings").update({
+      ...(data.patch.price !== undefined ? { price: data.patch.price } : {}),
+      ...(data.patch.quantity !== undefined ? { quantity: data.patch.quantity } : {}),
+      ...(data.patch.status !== undefined ? { status: data.patch.status } : {}),
+    }).eq("id", data.listingId).eq("seller_id", seller.id);
     if (error) throw new Error(error.message);
   });

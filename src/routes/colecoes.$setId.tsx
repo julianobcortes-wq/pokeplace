@@ -3,15 +3,13 @@ import { useMemo, useState } from "react";
 import { PageShell } from "@/components/SiteHeader";
 import { CardGrid } from "@/components/CardGrid";
 import { getSet } from "@/lib/catalog.functions";
-import { getCollectionValue } from "@/lib/pricing/quote";
-import { BRAND, money } from "@/lib/format";
+import { BRAND } from "@/lib/format";
 
 export const Route = createFileRoute("/colecoes/$setId")({
   loader: async ({ params }) => {
     const r = await getSet({ data: { id: params.setId } });
     if (!r.set) throw notFound();
-    const value = await getCollectionValue({ data: { ids: r.cards.map((c) => c.id).slice(0, 40) } });
-    return { ...r, value };
+    return { ...r, value: null as { total: number | null; currency: string | null; pricedCount: number; note: string } | null };
   },
   head: ({ loaderData }) => ({
     meta: [
@@ -27,7 +25,7 @@ export const Route = createFileRoute("/colecoes/$setId")({
 });
 
 function SetPage() {
-  const { set, cards, value } = Route.useLoaderData();
+  const { set, cards } = Route.useLoaderData();
   const [rarity, setRarity] = useState("");
   const [q, setQ] = useState("");
   const rarities = [...new Set(cards.map((c) => c.rarity).filter(Boolean))] as string[];
@@ -40,12 +38,7 @@ function SetPage() {
           <div>
             <h1 className="text-2xl font-semibold">{set?.name}</h1>
             <p className="text-sm text-muted-foreground">{set?.series} · Lançamento {set?.release_date} · total oficial {set?.total ?? "—"} · {cards.length} cartas nesta amostra</p>
-            <p className="mt-1 text-sm">
-              Valor da amostra:{" "}
-              {value?.total != null && value.currency ? <b>{money(value.total, value.currency)}</b> : "somando cotações…"}
-              {value ? ` · ${value.pricedCount} de ${cards.length} com preço` : ""}
-            </p>
-            <p className="text-xs text-muted-foreground">{value?.note ?? "Fonte: TCGdex (preço de mercado TCGplayer), quando a consulta pública responde. Escolha uma carta para ver o preço e anunciar ou conectar um canal."}</p>
+            <p className="mt-1 text-sm">Abra uma carta para ver o preço de mercado. A soma da amostra não é calculada nesta página.</p>
           </div>
         </div>
         <div className="mt-4 flex flex-wrap gap-3">

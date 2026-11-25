@@ -1,5 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { localCard } from "@/lib/catalog/local";
 
 export type PriceWindow = { label: string; days: number; price: number; currency: string };
 
@@ -82,6 +84,7 @@ function fromVariants(cardId: string, variants: Variant[]): CardQuote | null {
 }
 
 export async function quoteCard(cardId: string): Promise<CardQuote> {
+  if (!localCard(cardId)) return unavailable(cardId, "Esta carta não está no catálogo local, então nenhuma fonte externa foi consultada.");
   const hit = cache.get(cardId);
   if (hit && Date.now() - hit.at < TTL) return hit.quote;
   const ctrl = new AbortController();
@@ -107,7 +110,8 @@ export const getCardQuote = createServerFn({ method: "GET" })
   .handler(async ({ data }) => quoteCard(data.id));
 
 export const getCollectionValue = createServerFn({ method: "GET" })
-  .inputValidator((d: { ids: string[] }) => z.object({ ids: z.array(z.string().min(1).max(80)).max(40) }).parse(d))
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d: { ids: string[] }) => z.object({ ids: z.array(z.string().min(1).max(40)).max(12) }).parse(d))
   .handler(async ({ data }) => {
     const quotes = await Promise.all(data.ids.map((id) => quoteCard(id)));
     const priced = quotes.filter((q) => q.available && q.price != null && q.currency);

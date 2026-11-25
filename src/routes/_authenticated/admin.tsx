@@ -6,9 +6,8 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { SupportInbox } from "@/components/SupportInbox";
 import { PageShell } from "@/components/SiteHeader";
-import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
-import { setPlatformSetting, setSellerStatus } from "@/lib/guard.functions";
+import { listAdminSellers, setPlatformSetting, setSellerStatus } from "@/lib/guard.functions";
 import { BRAND, SELLER_STATUS, money } from "@/lib/format";
 import type { Database } from "@/integrations/supabase/types";
 
@@ -26,16 +25,7 @@ function Admin() {
   const { data } = useQuery({
     queryKey: ["admin", filter],
     enabled: isAdmin,
-    queryFn: async () => {
-      let q = supabase.from("sellers").select("*").order("created_at", { ascending: false });
-      if (filter) q = q.eq("status", filter as Status);
-      const [{ data: sellers }, { data: logs }, { data: orders }, { data: rate }] = await Promise.all([
-        q, supabase.from("seller_status_log").select("*").order("created_at", { ascending: false }).limit(200),
-        supabase.rpc("get_marketplace_financials"),
-        supabase.from("platform_settings").select("value").eq("key", "commission_rate").maybeSingle(),
-      ]);
-      return { sellers: sellers ?? [], logs: logs ?? [], financials: orders?.[0], rate: Number(rate?.value ?? 0) };
-    },
+    queryFn: () => listAdminSellers({ data: filter ? { status: filter as Status } : {} }),
   });
   if (loading) return <PageShell><p className="p-8">Carregando…</p></PageShell>;
   if (!isAdmin) return <PageShell><p className="p-8">Acesso restrito à administração.</p></PageShell>;
