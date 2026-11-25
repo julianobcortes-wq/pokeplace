@@ -8,6 +8,7 @@ import { SupportInbox } from "@/components/SupportInbox";
 import { PageShell } from "@/components/SiteHeader";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { setPlatformSetting, setSellerStatus } from "@/lib/guard.functions";
 import { BRAND, SELLER_STATUS, money } from "@/lib/format";
 import type { Database } from "@/integrations/supabase/types";
 
@@ -78,8 +79,12 @@ function CommissionSetting({ current, onDone }: { current: number; onDone: () =>
   const save = async () => {
     const n = Number(v.replace(",", ".")) / 100;
     if (!(n >= 0 && n < 1)) { toast.error("Informe um percentual entre 0 e 99"); return; }
-    const { error } = await supabase.from("platform_settings").update({ value: n, updated_at: new Date().toISOString() }).eq("key", "commission_rate");
-    if (error) toast.error(error.message); else { toast.success("Comissão atualizada"); setV(""); onDone(); }
+    try {
+      await setPlatformSetting({ data: { key: "commission_rate", value: n } });
+      toast.success("Comissão atualizada");
+      setV("");
+      onDone();
+    } catch (e) { toast.error(e instanceof Error ? e.message : "Acesso negado"); }
   };
   return (
     <div className="flex flex-wrap items-center gap-3 rounded-md bg-card p-4 text-sm shadow-sm">
@@ -98,8 +103,12 @@ function SellerRow({ s, logs, onDone }: { s: Seller; logs: Log[]; onDone: () => 
   const [note, setNote] = useState("");
   const [open, setOpen] = useState(false);
   const act = async (status: Status, official?: boolean) => {
-    const { error } = await supabase.rpc("admin_set_seller_status", { _seller_id: s.id, _status: status, _note: note, ...(official === undefined ? {} : { _official: official }) });
-    if (error) toast.error(error.message); else { toast.success(`Vendedor: ${SELLER_STATUS[status]}`); setNote(""); onDone(); }
+    try {
+      await setSellerStatus({ data: { sellerId: s.id, status, note, ...(official === undefined ? {} : { official }) } });
+      toast.success(`Vendedor: ${SELLER_STATUS[status]}`);
+      setNote("");
+      onDone();
+    } catch (e) { toast.error(e instanceof Error ? e.message : "Acesso negado"); }
   };
   return (
     <div className="py-4">

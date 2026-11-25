@@ -12,6 +12,7 @@ import { StoreProfileEditor, StoreReviews } from "@/components/seller-tools";
 import { supabase } from "@/integrations/supabase/client";
 import { searchCards } from "@/lib/catalog.functions";
 import type { Database } from "@/integrations/supabase/types";
+import { updateOwnListing } from "@/lib/guard.functions";
 import { BRAND, CONDITIONS, FINISHES, LANGUAGES, SELLER_STATUS, money } from "@/lib/format";
 
 export const Route = createFileRoute("/_authenticated/minha-loja")({
@@ -46,8 +47,15 @@ function MyStore() {
   const revenue = liveSales.filter((s) => s.status !== "cancelled").reduce((a, s) => a + Number(s.seller_amount), 0);
 
   const updateListing = async (id: string, patch: ListingPatch) => {
-    const { error } = await supabase.from("listings").update(patch).eq("id", id);
-    if (error) toast.error(error.message); else { toast.success("Anúncio atualizado"); refresh(); }
+    const next: { price?: number; quantity?: number; status?: "active" | "paused" | "sold_out" | "removed" } = {};
+    if (patch.price != null) next.price = Number(patch.price);
+    if (patch.quantity != null) next.quantity = Number(patch.quantity);
+    if (patch.status === "active" || patch.status === "paused" || patch.status === "sold_out" || patch.status === "removed") next.status = patch.status;
+    try {
+      await updateOwnListing({ data: { listingId: id, patch: next } });
+      toast.success("Anúncio atualizado");
+      refresh();
+    } catch (e) { toast.error(e instanceof Error ? e.message : "Acesso negado"); }
   };
 
 

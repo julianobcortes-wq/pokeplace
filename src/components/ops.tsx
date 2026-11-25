@@ -6,6 +6,8 @@ import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { money } from "@/lib/format";
+import { safeNotificationHref } from "@/lib/safe-url";
+import { processPayout, requestSellerPayout, resolveDispute, reviewReport, setPlatformSetting } from "@/lib/guard.functions";
 
 const f = "w-full rounded-md border border-input bg-background px-3 py-2 text-sm";
 const box = "rounded-md bg-card p-5 shadow-sm";
@@ -30,7 +32,7 @@ export function NotificationBell({ userId }: { userId: string }) {
       {open && (
         <div className="absolute right-0 z-50 mt-2 w-80 rounded-md border border-border bg-card p-2 text-foreground shadow-float">
           {data.length === 0 ? <p className="p-3 text-sm text-muted-foreground">Nenhuma notificação.</p> : data.map((n) => (
-            <a key={n.id} href={n.link ?? "#"} className="block rounded p-2 text-sm hover:bg-muted"><b>{n.title}</b>{n.body && <p className="text-xs text-muted-foreground">{n.body}</p>}<p className="text-[10px] text-muted-foreground">{new Date(n.created_at).toLocaleString("pt-BR")}</p></a>
+            <a key={n.id} href={safeNotificationHref(n.link)} className="block rounded p-2 text-sm hover:bg-muted"><b>{n.title}</b>{n.body && <p className="text-xs text-muted-foreground">{n.body}</p>}<p className="text-[10px] text-muted-foreground">{new Date(n.created_at).toLocaleString("pt-BR")}</p></a>
           ))}
         </div>
       )}
@@ -132,7 +134,13 @@ export function DisputeThread({ dispute, role }: { dispute: { id: string; status
   const { data = [] } = useQuery({ queryKey: ["dispute-msgs", dispute.id], queryFn: async () => (await supabase.from("dispute_messages").select("*").eq("dispute_id", dispute.id).order("created_at")).data ?? [] });
   const refresh = () => qc.invalidateQueries();
   const reply = async (escalate = false) => { if (err((await supabase.rpc("reply_dispute", { _dispute_id: dispute.id, _body: body || "Solicito mediação da PokePlace.", _escalate: escalate })).error, "Enviado")) { setBody(""); refresh(); } };
-  const resolve = async (outcome: string) => { if (err((await supabase.rpc("admin_resolve_dispute", { _dispute_id: dispute.id, _outcome: outcome, _amount: amount ? Number(amount) : 0, _note: body || "Decisão da mediação" })).error, "Decisão registrada")) refresh(); };
+  const resolve = async (outcome: string) => {
+    try {
+      await resolveDispute({ data: { disputeId: dispute.id, outcome, amount: amount ? Number(amount) : 0, note: body || "Decisão da mediação" } });
+      toast.success("Decisão registrada");
+      refresh();
+    } catch (e) { toast.error(e instanceof Error ? e.message : "Acesso negado"); }
+  };
   const done = dispute.status.startsWith("resolved");
   return (
     <div className="space-y-2 rounded border border-destructive/30 p-3 text-sm">
@@ -209,7 +217,14 @@ export function SellerFinance({ sellerId }: { sellerId: string }) {
     const [b, p] = await Promise.all([supabase.rpc("get_seller_balance", { _seller_id: sellerId }), supabase.from("payout_requests").select("*").eq("seller_id", sellerId).order("created_at", { ascending: false })]);
     return { b: b.data?.[0], payouts: p.data ?? [] };
   } });
-  const req = async () => { if (err((await supabase.rpc("request_payout", { _seller_id: sellerId, _amount: Number(amount), _pix_key: pix })).error, "Saque solicitado")) { setAmount(""); qc.invalidateQueries({ queryKey: ["balance", sellerId] }); } };
+  const req = async () => {
+    try {
+      await requestSellerPayout({ data: { sellerId, amount: Number(amount), pixKey: pix } });
+      toast.success("Saque solicitado");
+      setAmount("");
+      qc.invalidateQueries({ queryKey: ["balance", sellerId] });
+    } catch (e) { toast.error(e instanceof Error ? e.message : "Acesso negado"); }
+  };
   const b = data?.b;
   return (
     <section className={box}>
@@ -268,9 +283,18 @@ export function AdminOps() {
     return { disputes: d.data ?? [], payouts: p.data ?? [], reports: r.data ?? [], settings: Object.fromEntries((s.data ?? []).map((x) => [x.key, x.value])) as Record<string, unknown> };
   } });
   const refresh = () => qc.invalidateQueries({ queryKey: ["admin-ops"] });
-  const payout = async (id: string, status: string) => { if (err((await supabase.rpc("admin_process_payout", { _payout_id: id, _status: status, _note: notes[id] ?? "" })).error, "Saque atualizado")) refresh(); };
-  const report = async (id: string, status: string) => { if (err((await supabase.rpc("admin_review_report", { _report_id: id, _status: status, _note: notes[id] ?? "" })).error, "Denúncia revisada")) refresh(); };
-  const setting = async (key: string, val: string) => { if (err((await supabase.rpc("admin_set_setting", { _key: key, _value: Number(val) })).error, "Configuração salva")) refresh(); };
+  const payout = async (id: string, status: string) => {
+    try { await processPayout({ data: { payoutId: id, status: status === "rejected" ? "rejected" : "paid", note: notes[id] ?? "" } }); toast.success("Saque atualizado"); refresh(); }
+    catch (e) { toast.error(e instanceof Error ? e.message : "Acesso negado"); }
+  };
+  const report = async (id: string, status: string) => {
+    try { await reviewReport({ data: { reportId: id, status, note: notes[id] ?? "" } }); toast.success("Denúncia revisada"); refresh(); }
+    catch (e) { toast.error(e instanceof Error ? e.message : "Acesso negado"); }
+  };
+  const setting = async (key: string, val: string) => {
+    try { await setPlatformSetting({ data: { key, value: Number(val) } }); toast.success("Configuração salva"); refresh(); }
+    catch (e) { toast.error(e instanceof Error ? e.message : "Acesso negado"); }
+  };
   return (
     <>
       <section className={box}>
