@@ -13,6 +13,7 @@ import { ListingPhotos } from "@/components/ListingPhotos";
 import { Button } from "@/components/ui/button";
 import { getCard } from "@/lib/catalog.functions";
 import { getCardQuote, type CardQuote } from "@/lib/pricing/quote";
+import { buildReferenceSeries } from "@/lib/pricing/series";
 import { supabase } from "@/integrations/supabase/client";
 import { useCart } from "@/lib/cart";
 import { BRAND, CONDITIONS, LANGUAGES, FINISHES, money } from "@/lib/format";
@@ -202,6 +203,7 @@ function MarketQuote({ quote }: { quote: CardQuote | undefined }) {
 
 function PriceHistory({ cardId, quote }: { cardId: string; quote: CardQuote | undefined }) {
   const [r, setR] = useState<(typeof RANGES)[number]>(RANGES[2]);
+  const currency = quote?.currency ?? "USD";
   const { data, isLoading } = useQuery({
     queryKey: ["history", cardId, r.d],
     queryFn: async () => {
@@ -215,14 +217,24 @@ function PriceHistory({ cardId, quote }: { cardId: string; quote: CardQuote | un
     },
   });
   const locked = data?.[0]?.locked;
-  const points = useMemo(() => (data ?? []).filter((p) => !p.locked).map((p) => ({ t: new Date(p.observed_at ?? "").getTime(), price: Number(p.amount), source: p.source })), [data]);
-  const demo = points.some((p) => p.source === "demo");
+  const dbPoints = useMemo(
+    () => (data ?? []).filter((p) => !p.locked && p.amount != null).map((p) => ({ t: new Date(p.observed_at ?? "").getTime(), price: Number(p.amount), source: p.source ?? "live" })),
+    [data],
+  );
+  const fallback = useMemo(() => {
+    if (dbPoints.length > 0 || locked || isLoading) return [];
+    return buildReferenceSeries(quote, r.d).map((p) => ({ t: new Date(p.observed_at).getTime(), price: p.amount, source: p.source }));
+  }, [dbPoints.length, locked, isLoading, quote, r.d]);
+  const points = dbPoints.length ? dbPoints : fallback;
+  const demo = points.some((p) => p.source === "demo" || p.source === "tcgdex-window");
+  const fromWindows = points.some((p) => p.source === "tcgdex-window");
   const prices = points.map((p) => p.price);
   const last = prices[prices.length - 1], first = prices[0];
   const change = last != null && first ? ((last / first) - 1) * 100 : null;
   const up = (change ?? 0) >= 0;
   const color = up ? "var(--up)" : "var(--down)";
   const fmtDate = (t: number) => new Date(t).toLocaleDateString("pt-BR", { day: "2-digit", month: "short" });
+  const fmtMoney = (v: number) => money(v, currency);
 
   return (
     <section className="relative z-10 -mt-6 rounded-3xl border border-border bg-card p-5 shadow-float md:p-7">
@@ -230,7 +242,7 @@ function PriceHistory({ cardId, quote }: { cardId: string; quote: CardQuote | un
         <div>
           <p className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">Preço de referência {demo && <DemoBadge />}</p>
           <div className="mt-1 flex items-baseline gap-3">
-            <p className="num text-4xl font-bold">{last != null ? money(last) : "—"}</p>
+            <p className="num text-4xl font-bold">{last != null ? fmtMoney(last) : "—"}</p>
             <Change pct={change} className="text-sm" />
           </div>
         </div>
@@ -244,49 +256,51 @@ function PriceHistory({ cardId, quote }: { cardId: string; quote: CardQuote | un
       </div>
       {!locked && prices.length > 0 && (
         <div className="mt-4 grid grid-cols-3 gap-3 text-sm">
-          <Stat l="Mínima" v={money(Math.min(...prices))} />
-          <Stat l="Máxima" v={money(Math.max(...prices))} />
-          <Stat l="Média" v={money(prices.reduce((a, b) => a + b, 0) / prices.length)} />
+          <Stat l="Mínima" v={fmtMoney(Math.min(...prices))} />
+          <Stat l="Máxima" v={fmtMoney(Math.max(...prices))} />
+          <Stat l="Média" v={fmtMoney(prices.reduce((a, b) => a + b, 0) / prices.length)} />
         </div>
       )}
-      <div className="mt-5 h-64">
+      <div className="mt-5 h-64 min-h-[16rem]">
         {locked ? (
           <div className="dots flex h-full flex-col items-center justify-center rounded-2xl bg-muted p-6 text-center">
             <Lock className="h-6 w-6 text-primary" />
             <p className="mt-2 max-w-md text-sm">Veja como o preço desta carta evoluiu desde o lançamento. Desbloqueie o histórico completo e ferramentas avançadas.</p>
             <Link to="/planos" className="mt-4 rounded-full bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground">Desbloquear histórico completo</Link>
           </div>
+        ) : isLoading && points.length === 0 ? (
+          <div className="flex h-full items-center justify-center rounded-2xl bg-muted text-sm text-muted-foreground">Carregando gráfico…</div>
         ) : points.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center rounded-2xl bg-muted p-6 text-center text-sm text-muted-foreground">
-            {isLoading ? "Carregando gráfico…" : quote?.windows.length ? "Não há série diária de vendas. As médias abaixo são janelas publicadas, não um gráfico inventado." : "Ainda não há registros de preço para esta carta neste período."}
-            {quote && quote.windows.length > 0 && (
-              <div className="mt-4 grid w-full max-w-lg grid-cols-3 gap-2 text-foreground">
-                {quote.windows.map((w) => <Stat key={w.label} l={`${w.label} · Cardmarket`} v={money(w.price, w.currency)} />)}
-              </div>
-            )}
+            Ainda não há cotação pública para montar o gráfico desta carta.
           </div>
         ) : (
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={points} margin={{ left: 0, right: 0, top: 8, bottom: 0 }}>
+            <AreaChart data={points} margin={{ left: 0, right: 8, top: 8, bottom: 0 }}>
               <defs>
-                <linearGradient id="pg" x1="0" y1="0" x2="0" y2="1">
+                <linearGradient id={`pg-${cardId}`} x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor={color} stopOpacity={0.35} />
                   <stop offset="100%" stopColor={color} stopOpacity={0} />
                 </linearGradient>
               </defs>
               <CartesianGrid vertical={false} stroke="var(--border)" strokeDasharray="3 4" />
               <XAxis dataKey="t" type="number" domain={["dataMin", "dataMax"]} tickFormatter={fmtDate} fontSize={11} tickLine={false} axisLine={false} minTickGap={40} stroke="var(--muted-foreground)" />
-              <YAxis fontSize={11} width={64} tickLine={false} axisLine={false} domain={["auto", "auto"]} tickFormatter={(v: number) => money(v).replace(",00", "")} stroke="var(--muted-foreground)" />
+              <YAxis fontSize={11} width={72} tickLine={false} axisLine={false} domain={["auto", "auto"]} tickFormatter={(v: number) => fmtMoney(v).replace(",00", "")} stroke="var(--muted-foreground)" />
               <Tooltip
                 contentStyle={{ background: "var(--popover)", border: "1px solid var(--border)", borderRadius: 12, fontSize: 12 }}
-                labelFormatter={(t) => new Date(Number(t)).toLocaleDateString("pt-BR")} formatter={(v) => [money(Number(v)), "Preço"]} />
-              <Area dataKey="price" type="monotone" stroke={color} strokeWidth={2.2} fill="url(#pg)" dot={false} activeDot={{ r: 5, strokeWidth: 0 }} />
+                labelFormatter={(t) => new Date(Number(t)).toLocaleDateString("pt-BR")} formatter={(v) => [fmtMoney(Number(v)), "Preço"]} />
+              <Area dataKey="price" type="monotone" stroke={color} strokeWidth={2.2} fill={`url(#pg-${cardId})`} dot={false} activeDot={{ r: 5, strokeWidth: 0 }} />
             </AreaChart>
           </ResponsiveContainer>
         )}
       </div>
       <p className="mt-3 text-[11px] text-muted-foreground">
-        {demo ? "Histórico demonstrativo para visualização. Será substituído por preços reais de mercado e vendas da plataforma." : "Fonte e data registradas em cada ponto."} 3 meses grátis; períodos maiores no Premium.
+        {fromWindows
+          ? "Série montada a partir das médias públicas Cardmarket e do preço TCGplayer via TCGdex — não são vendas liquidadas no PokePlace."
+          : demo
+            ? "Histórico demonstrativo para visualização. Será substituído por preços reais de mercado e vendas da plataforma."
+            : "Fonte e data registradas em cada ponto."}{" "}
+        3 meses grátis; períodos maiores no Premium.
       </p>
     </section>
   );

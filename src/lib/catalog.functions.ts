@@ -110,12 +110,34 @@ export const marketStats = createServerFn({ method: "GET" }).handler(async () =>
 });
 
 export const getTrends = createServerFn({ method: "GET" })
-  .inputValidator((d: { ids: string[] }) => ({ ids: d.ids.slice(0, 120) }))
+  .inputValidator((d: { ids: string[] }) => ({ ids: d.ids.slice(0, 40) }))
   .handler(async ({ data }) => {
-    if (!data.ids.length || !dbConfigured()) return {} as Record<string, { points: number[]; last: number; change: number | null; demo: boolean }>;
-    const { data: rows } = await publicDb().rpc("get_card_trends", { _ids: data.ids });
-    const out: Record<string, { points: number[]; last: number; change: number | null; demo: boolean }> = {};
-    for (const r of rows ?? []) out[r.card_id] = { points: (r.points ?? []).map(Number), last: Number(r.last_price), change: r.change_pct == null ? null : Number(r.change_pct), demo: !!r.is_demo };
+    type Trend = { points: number[]; last: number; change: number | null; demo: boolean };
+    const out: Record<string, Trend> = {};
+    if (!data.ids.length) return out;
+
+    if (dbConfigured()) {
+      const { data: rows } = await publicDb().rpc("get_card_trends", { _ids: data.ids });
+      for (const r of rows ?? []) {
+        out[r.card_id] = {
+          points: (r.points ?? []).map(Number),
+          last: Number(r.last_price),
+          change: r.change_pct == null ? null : Number(r.change_pct),
+          demo: !!r.is_demo,
+        };
+      }
+    }
+
+    const missing = data.ids.filter((id) => !out[id]?.points?.length).slice(0, 24);
+    if (missing.length) {
+      const { quoteCard } = await import("@/lib/pricing/quote");
+      const { buildReferenceSeries, seriesToTrend } = await import("@/lib/pricing/series");
+      const quotes = await Promise.all(missing.map((id) => quoteCard(id)));
+      for (const q of quotes) {
+        const trend = seriesToTrend(buildReferenceSeries(q, 90));
+        if (trend) out[q.cardId] = trend;
+      }
+    }
     return out;
   });
 
