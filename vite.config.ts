@@ -15,4 +15,8 @@ export default defineConfig({
     // nitro/vite builds from this
     server: { entry: "server" },
   },
+  vite: {
+    // Allow Cloudflare quick tunnels and Cursor previews to reach the local SSR server.
+    server: { allowedHosts: true },
+  },
 });
