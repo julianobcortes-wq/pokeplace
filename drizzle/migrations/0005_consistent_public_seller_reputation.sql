@@ -1,0 +1,13 @@
+CREATE OR REPLACE FUNCTION public.get_card_offers(_card_id text) RETURNS TABLE(listing_id uuid,seller_id uuid,store_name text,store_slug text,is_official boolean,city text,state text,language text,finish text,condition text,graded boolean,grade_company text,grade text,price numeric,currency text,quantity integer,notes text,completed_sales bigint,rating numeric,reviews bigint,logo_url text) LANGUAGE sql STABLE SECURITY DEFINER SET search_path=public AS $$
+SELECT l.id,s.id,s.store_name,s.slug,s.is_official,s.city,s.state,l.language,l.finish,l.condition,l.graded,l.grade_company,l.grade,l.price,l.currency,l.quantity,l.notes,r.completed_sales,r.rating,r.reviews,s.logo_url FROM public.listings l JOIN public.sellers s ON s.id=l.seller_id CROSS JOIN LATERAL public.get_seller_reputation(s.id) r WHERE l.card_id=_card_id AND l.status='active' AND l.quantity>0 AND s.status='approved' ORDER BY l.price
+$$;
+CREATE OR REPLACE FUNCTION public.list_public_sellers(_limit integer DEFAULT 8) RETURNS TABLE(id uuid,store_name text,slug text,city text,state text,is_official boolean,logo_url text,rating numeric,reviews bigint,completed_sales bigint,active_listings bigint) LANGUAGE sql STABLE SECURITY DEFINER SET search_path=public AS $$
+SELECT s.id,s.store_name,s.slug,s.city,s.state,s.is_official,s.logo_url,r.rating,r.reviews,r.completed_sales,(SELECT count(*) FROM public.listings l WHERE l.seller_id=s.id AND l.status='active' AND l.quantity>0) FROM public.sellers s CROSS JOIN LATERAL public.get_seller_reputation(s.id) r WHERE s.status='approved' ORDER BY s.created_at LIMIT greatest(0,least(_limit,500))
+$$;
+CREATE OR REPLACE FUNCTION public.get_seller_trust(_seller_id uuid) RETURNS TABLE(rating numeric,reviews bigint,completed_sales bigint,cancelled bigint,total_items bigint,level text,service_rating numeric,packaging_rating numeric,shipping_rating numeric) LANGUAGE sql STABLE SECURITY DEFINER SET search_path=public AS $$
+SELECT r.*,a.s,a.p,a.e FROM public.get_seller_reputation(_seller_id) r CROSS JOIN (SELECT round(avg(rating_service),2) s,round(avg(rating_packaging),2) p,round(avg(rating_shipping),2) e FROM public.seller_reviews WHERE seller_id=_seller_id AND public.is_real_completed_order(order_id)) a WHERE public.is_approved_seller(_seller_id) OR public.owns_seller(_seller_id) OR public.has_role(auth.uid(),'admin')
+$$;
+REVOKE ALL ON FUNCTION public.get_seller_trust(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.get_seller_trust(uuid) TO anon,authenticated;
+REVOKE SELECT ON public.seller_reviews FROM anon,authenticated;
+GRANT SELECT(id,seller_id,order_id,rating_service,rating_packaging,rating_shipping,comment,reply,replied_at,created_at) ON public.seller_reviews TO anon,authenticated;

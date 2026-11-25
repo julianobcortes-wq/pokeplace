@@ -1,0 +1,1 @@
+revoke all on public.price_observations from anon, authenticated;

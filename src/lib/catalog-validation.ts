@@ -1,0 +1,2 @@
+import { z } from 'zod';
+export const catalogSearchInput = z.object({ q: z.string().trim().max(120).optional(), set: z.string().max(80).optional(), rarity: z.string().max(80).optional(), limit: z.number().int().min(1).max(120).optional() });

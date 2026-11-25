@@ -1,0 +1,1 @@
+update public.platform_settings set value = '{"name":"PokePlace"}'::jsonb, updated_at = now() where key = 'brand';

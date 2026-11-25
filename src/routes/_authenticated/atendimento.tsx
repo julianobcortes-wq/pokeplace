@@ -1,0 +1,5 @@
+import { createFileRoute } from '@tanstack/react-router';
+import { PageShell } from '@/components/SiteHeader';
+import { SupportInbox } from '@/components/SupportInbox';
+
+export const Route = createFileRoute('/_authenticated/atendimento')({ head: () => ({ meta: [{ title: 'Central de atendimento | PokePlace' }, { name: 'description', content: 'Acompanhe solicitações sobre pedidos, lojas e sua conta.' }, { property: 'og:title', content: 'Atendimento | PokePlace' }, { property: 'og:description', content: 'Suas conversas privadas com a equipe PokePlace.' }, { property: 'og:type', content: 'website' }, { name: 'twitter:card', content: 'summary' }] }), component: () => <PageShell><main className="mx-auto max-w-5xl px-4 py-8"><h1 className="font-display text-3xl font-bold">Central de atendimento</h1><SupportInbox /></main></PageShell> });
