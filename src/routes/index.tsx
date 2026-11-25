@@ -24,11 +24,10 @@ export const Route = createFileRoute("/")({
   component: Index,
 });
 
-const FAN = ["swsh7-215", "sv3pt5-199", "base1-4", "sv8pt5-161", "swsh12pt5-160"];
-
 function Index() {
   const { sets, listings, stats, stores, trending } = Route.useLoaderData();
-  const trends = useTrends([...FAN, ...trending.map((c) => c.id)]);
+  const fan = trending.slice(0, 5);
+  const trends = useTrends(trending.map((c) => c.id));
   const fmt = (n: number) => n.toLocaleString("pt-BR");
   const movers = trending.map((c) => ({ c, t: trends[c.id] })).filter((x) => x.t).sort((a, b) => Math.abs(b.t!.change ?? 0) - Math.abs(a.t!.change ?? 0));
   const hero = trends["base1-4"];
@@ -56,15 +55,14 @@ function Index() {
           </div>
 
           <div className="relative mx-auto h-[360px] w-full max-w-lg sm:h-[440px]">
-            {FAN.map((id, i) => {
-              const [set, num] = id.split("-");
+            {fan.map((card, i) => {
               const rot = [-20, -10, 0, 10, 20][i]!;
               return (
-                <Link key={id} to="/carta/$cardId" params={{ cardId: id }}
+                <Link key={card.id} to="/carta/$cardId" params={{ cardId: card.id }}
                   style={{ transform: `translateX(${(i - 2) * 22}%) translateY(${Math.abs(i - 2) * 18}px) rotate(${rot}deg)`, zIndex: i === 2 ? 10 : 5 - Math.abs(i - 2) }}
                   className="absolute left-1/2 top-2 -ml-[95px] w-[190px] transition duration-500 hover:z-20 hover:-translate-y-4 sm:-ml-[115px] sm:w-[230px]">
                   <div className={i === 2 ? "animate-float" : ""}>
-                    <HoloCard src={`https://images.pokemontcg.io/${set}/${num}_hires.png`} alt="" eager className="shadow-float ring-1 ring-ink-foreground/10" />
+                    <HoloCard src={card.image_small} alt={card.name} eager className="shadow-float ring-1 ring-ink-foreground/10" />
                   </div>
                 </Link>
               );

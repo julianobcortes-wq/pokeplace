@@ -70,7 +70,7 @@ export function localStats() {
 }
 
 export function localTrending(): LocalCard[] {
-  const ids = ["base1-4", "base1-2", "sv03.5-006", "swsh7-215", "me01-001"];
+  const ids = ["base1-4", "base1-2", "sv03.5-006", "swsh7-95", "me01-001"];
   const picked = ids.map((id) => localCard(id)).filter((c): c is LocalCard => !!c);
   return picked.length ? picked : cards.slice(0, 8);
 }
