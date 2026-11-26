@@ -16,15 +16,18 @@ import { listSnapshots } from "@/lib/channels/hub";
 import type { ChannelSnapshot } from "@/lib/channels/types";
 
 export const Route = createFileRoute("/canais")({
-  validateSearch: (search: Record<string, unknown>) => ({
-    seller: typeof search.seller === "string" && /^[a-zA-Z0-9_-]{1,80}$/.test(search.seller) ? search.seller : "loja-local",
-  }),
+  validateSearch: (search: Record<string, unknown>) => {
+    const raw = search["seller"];
+    return {
+      seller: typeof raw === "string" && /^[a-zA-Z0-9_-]{1,80}$/.test(raw) ? raw : "loja-local",
+    };
+  },
   loaderDeps: ({ search }) => ({ seller: search.seller }),
   loader: ({ deps }) => listSnapshots(deps.seller),
   head: () => ({
     meta: [
-      { title: `Canais | ${BRAND.name}` },
-      { name: "description", content: "Conecte marketplaces e acompanhe o status de catálogo e pedidos. Modo local usa fixtures, sem credenciais." },
+      { title: `Canais (Fase 2) | ${BRAND.name}` },
+      { name: "description", content: "Hub multicanal em preparação para a Fase 2. Modo local usa fixtures sem credenciais externas." },
     ],
   }),
   component: ChannelsPage,
@@ -32,7 +35,7 @@ export const Route = createFileRoute("/canais")({
 
 const STATUS: Record<string, string> = {
   disconnected: "Desconectado",
-  connected: "Conectado (mock)",
+  connected: "Conectado (sandbox)",
   error: "Erro",
 };
 
@@ -49,7 +52,7 @@ function ChannelsPage() {
 
   const run = async (id: string, action: "connect" | "disconnect" | "catalog" | "orders") => {
     if (!user) {
-      toast.error("Entre na conta para conectar canais");
+      toast.error("Entre na conta para testar conectores");
       return;
     }
     setBusy(`${action}:${id}`);
@@ -69,53 +72,72 @@ function ChannelsPage() {
 
   return (
     <PageShell>
-      <main className="mx-auto max-w-6xl space-y-4 px-4 py-8">
-        <section className="rounded-md bg-card p-5 shadow-sm">
-          <h1 className="text-2xl font-semibold">Canais de venda</h1>
-          <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-            Hub para ligar Mercado Livre, Shopee, Amazon, Magalu, Americanas, TikTok Shop, TCGplayer e novos canais no mesmo lugar.
-            Esta versão não chama as APIs: conectar marca o canal como mock e a sincronização grava fixtures sintéticas na memória do processo.
-            Loja: <b>{seller}</b>.
+      <section className="grain bg-ink-glow text-ink-foreground">
+        <div className="mx-auto max-w-6xl px-4 py-10">
+          <span className="inline-block rounded-full border border-ink-foreground/20 px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-holo">
+            Fase 2 · Sandbox local
+          </span>
+          <h1 className="mt-3 text-3xl font-extrabold md:text-4xl">Canais externos de venda</h1>
+          <p className="mt-2 max-w-3xl text-sm opacity-75">
+            Integrações externas (Mercado Livre, Shopee, Amazon, Magalu, TCGplayer) estão agendadas para a Fase 2. Nesta versão o hub funciona em modo sandbox local com fixtures sintéticas para validar o fluxo sem credenciais externas. Loja: <b>{seller}</b>.
           </p>
           {!loading && !user && (
-            <p className="mt-3 text-sm">
-              <Link to="/auth" className="text-primary font-semibold">Entre na conta</Link> para conectar ou sincronizar canais.
+            <p className="mt-4 text-sm">
+              <Link to="/auth" search={{ next: "/canais" }} className="font-semibold text-holo underline">
+                Entre na conta
+              </Link>{" "}
+              para testar a conexão sandbox.
             </p>
           )}
-        </section>
+        </div>
+      </section>
+
+      <main className="mx-auto max-w-6xl space-y-4 px-4 py-8">
         <ul className="grid gap-3">
           {rows.map((channel) => {
             const on = channel.connection.status === "connected";
             return (
-              <li key={channel.id} className="rounded-md bg-card p-5 shadow-sm">
+              <li key={channel.id} className="rounded-2xl border border-border bg-card p-5 shadow-slab">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <h2 className="text-lg font-semibold">{channel.name}</h2>
+                    <h2 className="text-lg font-bold">{channel.name}</h2>
                     <p className="text-sm text-muted-foreground">
                       {channel.region === "BR" ? "Brasil" : "Global"} · {channel.auth.replaceAll("_", " ")} · {STATUS[channel.connection.status]}
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-2">
                     {on ? (
-                      <Button variant="outline" disabled={busy !== null || !user} onClick={() => run(channel.id, "disconnect")}>Desconectar</Button>
+                      <Button variant="outline" size="sm" disabled={busy !== null || !user} onClick={() => run(channel.id, "disconnect")}>
+                        Desconectar
+                      </Button>
                     ) : (
-                      <Button disabled={busy !== null || !user} onClick={() => run(channel.id, "connect")}>Conectar</Button>
+                      <Button size="sm" disabled={busy !== null || !user} onClick={() => run(channel.id, "connect")}>
+                        Conectar (sandbox)
+                      </Button>
                     )}
-                    <Button variant="secondary" disabled={!on || busy !== null || !user} onClick={() => run(channel.id, "catalog")}>Sincronizar catálogo</Button>
-                    <Button variant="secondary" disabled={!on || busy !== null || !user} onClick={() => run(channel.id, "orders")}>Sincronizar pedidos</Button>
+                    <Button variant="secondary" size="sm" disabled={!on || busy !== null || !user} onClick={() => run(channel.id, "catalog")}>
+                      Sincronizar catálogo
+                    </Button>
+                    <Button variant="secondary" size="sm" disabled={!on || busy !== null || !user} onClick={() => run(channel.id, "orders")}>
+                      Sincronizar pedidos
+                    </Button>
                   </div>
                 </div>
                 <dl className="mt-4 grid gap-2 text-sm sm:grid-cols-3">
                   <div>
-                    <dt className="text-muted-foreground">Catálogo</dt>
-                    <dd>{channel.connection.catalog.count} itens · {channel.connection.catalog.state}</dd>
+                    <dt className="text-xs text-muted-foreground">Catálogo</dt>
+                    <dd className="num font-medium">
+                      {channel.connection.catalog.count} itens · {channel.connection.catalog.state}
+                    </dd>
                   </div>
                   <div>
-                    <dt className="text-muted-foreground">Pedidos</dt>
-                    <dd>{channel.connection.orders.count} · {channel.connection.orders.state}</dd>
+                    <dt className="text-xs text-muted-foreground">Pedidos</dt>
+                    <dd className="num font-medium">
+                      {channel.connection.orders.count} · {channel.connection.orders.state}
+                    </dd>
                   </div>
                   <div>
-                    <dt className="text-muted-foreground">Variáveis</dt>
+                    <dt className="text-xs text-muted-foreground">Variáveis previstas</dt>
                     <dd className="font-mono text-xs">{channel.env.join(", ")}</dd>
                   </div>
                 </dl>

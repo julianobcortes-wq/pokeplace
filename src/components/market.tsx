@@ -1,13 +1,27 @@
 import { MarketplaceImage } from "./MarketplaceImage";
 import { Link } from "@tanstack/react-router";
 import { BadgeCheck, ShieldCheck, Sparkles, Star } from "lucide-react";
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { isSupabaseConfigured } from "@/lib/runtime-config";
 
-/** Card image with 3D tilt + holographic glare following pointer. */
+function cardImageFallbacks(src: string | null): string[] {
+  if (!src) return [];
+  const list = [src];
+  if (src.endsWith(".webp")) list.push(src.replace(/\.webp$/, ".png"));
+  else if (src.endsWith(".png")) list.push(src.replace(/\.png$/, ".webp"));
+  return list;
+}
+
+/** Card image with 3D tilt + holographic glare following pointer + graceful fallback. */
 export function HoloCard({ src, alt, className = "", eager = false }: { src: string | null; alt: string; className?: string; eager?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
+  const candidates = cardImageFallbacks(src);
+  const [idx, setIdx] = useState(0);
+  useEffect(() => { setIdx(0); }, [src]);
+  const activeSrc = candidates[idx] ?? null;
+
   const move = (e: React.PointerEvent) => {
     const el = ref.current; if (!el) return;
     const r = el.getBoundingClientRect();
@@ -19,9 +33,53 @@ export function HoloCard({ src, alt, className = "", eager = false }: { src: str
   const leave = () => { const el = ref.current; if (!el) return; el.style.setProperty("--rx", "0deg"); el.style.setProperty("--ry", "0deg"); el.dataset["active"] = "false"; };
   return (
     <div ref={ref} onPointerMove={move} onPointerLeave={leave} className={`holo-tilt relative overflow-hidden rounded-[4.5%/3.2%] ${className}`}>
-      {src && <img src={src} alt={alt} loading={eager ? "eager" : "lazy"} draggable={false} className="block aspect-[5/7] w-full select-none object-cover" />}
+      {activeSrc ? (
+        <img
+          src={activeSrc}
+          alt={alt}
+          loading={eager ? "eager" : "lazy"}
+          decoding="async"
+          draggable={false}
+          onError={() => setIdx((i) => i + 1)}
+          className="block aspect-[5/7] w-full select-none object-cover"
+        />
+      ) : (
+        <div className="grid aspect-[5/7] w-full place-items-center bg-ink-glow p-3 text-center text-ink-foreground">
+          <span className="font-display text-xs font-bold leading-snug opacity-85">{alt}</span>
+        </div>
+      )}
       <span className="glare" />
     </div>
+  );
+}
+
+/** Set logo image with automatic .webp -> .png -> typographic fallback (never renders broken image icon). */
+export function SetLogo({ src, name, className = "h-12 max-w-[140px]" }: { src: string | null | undefined; name: string; className?: string }) {
+  const candidates: string[] = [];
+  if (src) {
+    const normalized = /^https:\/\/assets\.tcgdex\.net\/.+\/(logo|symbol)$/i.test(src) ? `${src}.webp` : src;
+    candidates.push(normalized);
+    if (normalized.endsWith(".webp")) candidates.push(normalized.replace(/\.webp$/, ".png"));
+    else if (normalized.endsWith(".png")) candidates.push(normalized.replace(/\.png$/, ".webp"));
+  }
+  const [idx, setIdx] = useState(0);
+  useEffect(() => { setIdx(0); }, [src]);
+  const active = candidates[idx];
+  if (!active) {
+    return (
+      <span className="inline-flex items-center justify-center rounded-lg border border-border/80 bg-muted/60 px-3 py-1.5 font-display text-xs font-extrabold tracking-tight text-foreground">
+        {name}
+      </span>
+    );
+  }
+  return (
+    <img
+      src={active}
+      alt={name}
+      decoding="async"
+      onError={() => setIdx((i) => i + 1)}
+      className={`${className} object-contain`}
+    />
   );
 }
 
@@ -119,7 +177,7 @@ export function VerifiedPill() {
 }
 
 export function useSellerTrust(id?: string) {
-  return useQuery({ queryKey: ["seller-trust", id], enabled: !!id, staleTime: 60000,
+  return useQuery({ queryKey: ["seller-trust", id], enabled: !!id && isSupabaseConfigured(), staleTime: 60000,
     queryFn: async () => { if (!id) return null; const { data, error } = await supabase.rpc("get_seller_trust", { _seller_id: id }); if (error) throw error; return data?.[0] ?? null; },
   });
 }

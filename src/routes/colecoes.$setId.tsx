@@ -1,15 +1,18 @@
-import { createFileRoute, notFound } from "@tanstack/react-router";
+import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
+import { ArrowLeft, Search } from "lucide-react";
 import { PageShell } from "@/components/SiteHeader";
 import { CardGrid } from "@/components/CardGrid";
-import { getSet } from "@/lib/catalog.functions";
+import { SetLogo } from "@/components/market";
+import { getSet, getTrends } from "@/lib/catalog.functions";
 import { BRAND } from "@/lib/format";
 
 export const Route = createFileRoute("/colecoes/$setId")({
   loader: async ({ params }) => {
     const r = await getSet({ data: { id: params.setId } });
     if (!r.set) throw notFound();
-    return { ...r, value: null as { total: number | null; currency: string | null; pricedCount: number; note: string } | null };
+    const initialTrends = await getTrends({ data: { ids: r.cards.slice(0, 30).map((c) => c.id) } });
+    return { ...r, initialTrends };
   },
   head: ({ loaderData }) => ({
     meta: [
@@ -25,31 +28,109 @@ export const Route = createFileRoute("/colecoes/$setId")({
 });
 
 function SetPage() {
-  const { set, cards } = Route.useLoaderData();
+  const { set, cards, initialTrends } = Route.useLoaderData();
   const [rarity, setRarity] = useState("");
   const [q, setQ] = useState("");
-  const rarities = [...new Set(cards.map((c) => c.rarity).filter(Boolean))] as string[];
-  const list = useMemo(() => cards.filter((c) => (!rarity || c.rarity === rarity) && (!q || `${c.name} ${c.number}`.toLowerCase().includes(q.toLowerCase()))), [cards, rarity, q]);
+  const [sort, setSort] = useState<"number" | "name-asc" | "name-desc">("number");
+
+  const rarities = useMemo(() => [...new Set(cards.map((c) => c.rarity).filter(Boolean))] as string[], [cards]);
+
+  const list = useMemo(() => {
+    const term = q.trim().toLowerCase();
+    const filtered = cards.filter(
+      (c) => (!rarity || c.rarity === rarity) && (!term || `${c.name} ${c.number} ${c.id}`.toLowerCase().includes(term)),
+    );
+    if (sort === "name-asc") return [...filtered].sort((a, b) => a.name.localeCompare(b.name));
+    if (sort === "name-desc") return [...filtered].sort((a, b) => b.name.localeCompare(a.name));
+    return filtered;
+  }, [cards, rarity, q, sort]);
+
   return (
     <PageShell>
-      <main className="mx-auto max-w-7xl px-4 py-8">
-        <div className="flex flex-wrap items-center gap-6 rounded-md bg-card p-5 shadow-sm">
-          {set?.logo_url && <img src={set.logo_url} alt={set.name} className="h-16 w-auto" />}
-          <div>
-            <h1 className="text-2xl font-semibold">{set?.name}</h1>
-            <p className="text-sm text-muted-foreground">{set?.series} · Lançamento {set?.release_date} · total oficial {set?.total ?? "—"} · {cards.length} cartas nesta amostra</p>
-            <p className="mt-1 text-sm">Abra uma carta para ver o preço de mercado. A soma da amostra não é calculada nesta página.</p>
+      <section className="grain relative overflow-hidden bg-ink-glow text-ink-foreground">
+        <div className="pointer-events-none absolute -right-24 -top-24 h-72 w-72 rounded-full bg-holo opacity-15 blur-3xl" />
+        <div className="relative mx-auto max-w-7xl px-4 py-8 md:py-12">
+          <Link to="/colecoes" className="inline-flex items-center gap-1.5 text-xs font-semibold opacity-70 transition hover:opacity-100">
+            <ArrowLeft className="h-3.5 w-3.5" /> Todas as coleções
+          </Link>
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-6">
+            <div className="flex flex-wrap items-center gap-6">
+              {set?.logo_url && (
+                <div className="rounded-2xl border border-ink-foreground/10 bg-ink-foreground/5 p-4 backdrop-blur">
+                  <SetLogo src={set.logo_url} name={set.name} className="h-14 max-w-[160px] md:h-16" />
+                </div>
+              )}
+              <div>
+                <p className="num text-[11px] uppercase tracking-[0.2em] text-holo">{set?.series ?? "Pokémon TCG"}</p>
+                <h1 className="mt-1 text-3xl font-extrabold md:text-5xl">{set?.name}</h1>
+                <p className="mt-2 text-sm opacity-75">
+                  Lançamento {set?.release_date?.split("-").reverse().join("/") ?? "—"} · Código <span className="num">{set?.id}</span>
+                </p>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3 text-center">
+              <div className="rounded-2xl border border-ink-foreground/10 bg-ink-foreground/5 px-5 py-3">
+                <p className="num text-2xl font-bold">{set?.total ?? cards.length}</p>
+                <p className="text-[11px] opacity-60">total da expansão</p>
+              </div>
+              <div className="rounded-2xl border border-ink-foreground/10 bg-ink-foreground/5 px-5 py-3">
+                <p className="num text-2xl font-bold">{cards.length}</p>
+                <p className="text-[11px] opacity-60">cartas listadas</p>
+              </div>
+            </div>
           </div>
         </div>
-        <div className="mt-4 flex flex-wrap gap-3">
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filtrar por nome ou número" className="rounded-md border border-input bg-card px-3 py-2 text-sm" />
-          <select value={rarity} onChange={(e) => setRarity(e.target.value)} className="rounded-md border border-input bg-card px-3 py-2 text-sm" aria-label="Raridade">
-            <option value="">Todas as raridades</option>
-            {rarities.map((r) => <option key={r}>{r}</option>)}
+      </section>
+
+      <main className="mx-auto max-w-7xl px-4 py-8">
+        <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-border bg-card p-3 shadow-slab">
+          <div className="flex min-w-[220px] flex-1 items-center gap-2 rounded-full border border-input bg-background px-3.5 py-2 text-sm">
+            <Search className="h-4 w-4 text-muted-foreground" />
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Filtrar por nome ou número…"
+              aria-label="Filtrar por nome ou número"
+              className="w-full bg-transparent outline-none"
+            />
+          </div>
+          {rarities.length > 0 && (
+            <select
+              value={rarity}
+              onChange={(e) => setRarity(e.target.value)}
+              className="rounded-full border border-input bg-background px-3.5 py-2 text-sm"
+              aria-label="Raridade"
+            >
+              <option value="">Todas as raridades</option>
+              {rarities.map((r) => (
+                <option key={r}>{r}</option>
+              ))}
+            </select>
+          )}
+          <select
+            value={sort}
+            onChange={(e) => setSort(e.target.value as "number" | "name-asc" | "name-desc")}
+            aria-label="Ordenar por"
+            className="rounded-full border border-input bg-background px-3.5 py-2 text-sm"
+          >
+            <option value="number">Ordem numérica</option>
+            <option value="name-asc">Nome (A–Z)</option>
+            <option value="name-desc">Nome (Z–A)</option>
           </select>
-          <span className="self-center text-sm text-muted-foreground">{list.length} cartas</span>
+          <span className="num px-2 text-xs text-muted-foreground">
+            {list.length} {list.length === 1 ? "carta" : "cartas"}
+          </span>
         </div>
-        <div className="mt-4"><CardGrid cards={list} setName={set?.name} /></div>
+
+        <div className="mt-6">
+          {list.length === 0 ? (
+            <div className="dots rounded-3xl border border-dashed border-border p-10 text-center text-muted-foreground">
+              Nenhuma carta encontrada com esses filtros.
+            </div>
+          ) : (
+            <CardGrid cards={list} setName={set?.name} initialTrends={initialTrends} />
+          )}
+        </div>
       </main>
     </PageShell>
   );
