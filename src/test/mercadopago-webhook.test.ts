@@ -8,23 +8,23 @@ async function hmacSha256Hex(secret: string, message: string): Promise<string> {
 }
 
 describe("Mercado Pago webhook verification", () => {
-  const prevSecret = process.env.MP_WEBHOOK_SECRET;
-  const prevToken = process.env.MP_ACCESS_TOKEN;
-  const prevSandbox = process.env.ALLOW_SANDBOX_PAYMENTS;
+  const prevSecret = process.env["MP_WEBHOOK_SECRET"];
+  const prevToken = process.env["MP_ACCESS_TOKEN"];
+  const prevSandbox = process.env["ALLOW_SANDBOX_PAYMENTS"];
 
   beforeEach(() => {
-    delete process.env.MP_WEBHOOK_SECRET;
-    delete process.env.MP_ACCESS_TOKEN;
-    delete process.env.ALLOW_SANDBOX_PAYMENTS;
+    delete process.env["MP_WEBHOOK_SECRET"];
+    delete process.env["MP_ACCESS_TOKEN"];
+    delete process.env["ALLOW_SANDBOX_PAYMENTS"];
   });
 
   afterEach(() => {
-    if (prevSecret === undefined) delete process.env.MP_WEBHOOK_SECRET;
-    else process.env.MP_WEBHOOK_SECRET = prevSecret;
-    if (prevToken === undefined) delete process.env.MP_ACCESS_TOKEN;
-    else process.env.MP_ACCESS_TOKEN = prevToken;
-    if (prevSandbox === undefined) delete process.env.ALLOW_SANDBOX_PAYMENTS;
-    else process.env.ALLOW_SANDBOX_PAYMENTS = prevSandbox;
+    if (prevSecret === undefined) delete process.env["MP_WEBHOOK_SECRET"];
+    else process.env["MP_WEBHOOK_SECRET"] = prevSecret;
+    if (prevToken === undefined) delete process.env["MP_ACCESS_TOKEN"];
+    else process.env["MP_ACCESS_TOKEN"] = prevToken;
+    if (prevSandbox === undefined) delete process.env["ALLOW_SANDBOX_PAYMENTS"];
+    else process.env["ALLOW_SANDBOX_PAYMENTS"] = prevSandbox;
   });
 
   it("rejects when webhook secret is unset", async () => {
@@ -36,7 +36,7 @@ describe("Mercado Pago webhook verification", () => {
   });
 
   it("accepts a valid HMAC signature", async () => {
-    process.env.MP_WEBHOOK_SECRET = "test-secret";
+    process.env["MP_WEBHOOK_SECRET"] = "test-secret";
     const ts = "1700000000";
     const dataId = "999";
     const requestId = "abc-req";
@@ -50,8 +50,8 @@ describe("Mercado Pago webhook verification", () => {
   });
 
   it("keeps sandbox payments off when Mercado Pago is configured", () => {
-    process.env.ALLOW_SANDBOX_PAYMENTS = "true";
-    process.env.MP_ACCESS_TOKEN = "APP_USR-xxx";
+    process.env["ALLOW_SANDBOX_PAYMENTS"] = "true";
+    process.env["MP_ACCESS_TOKEN"] = "APP_USR-xxx";
     expect(sandboxPaymentsAllowed()).toBe(false);
   });
 });

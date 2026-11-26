@@ -1,14 +1,23 @@
 import { fetchMercadoPagoPayment, verifyMercadoPagoWebhook } from "./mercadopago";
+import { sendTransactionalEmail } from "@/lib/notify/email";
+
+type WebhookBody = {
+  data?: { id?: string | number };
+  id?: string | number;
+  type?: string;
+  action?: string;
+};
 
 export async function handleMercadoPagoWebhook(request: Request): Promise<Response> {
-  let paymentId: string | null = null;
   const url = new URL(request.url);
-  paymentId = url.searchParams.get("data.id") || url.searchParams.get("id");
+  let paymentId: string | null = url.searchParams.get("data.id") || url.searchParams.get("id");
 
-  let body: { data?: { id?: string | number }; id?: string | number; type?: string; action?: string } | null = null;
+  let body: WebhookBody | null = null;
   try {
-    body = (await request.json()) as typeof body;
-    if (!paymentId) paymentId = body?.data?.id != null ? String(body.data.id) : body?.id != null ? String(body.id) : null;
+    body = (await request.json()) as WebhookBody;
+    if (!paymentId) {
+      paymentId = body?.data?.id != null ? String(body.data.id) : body?.id != null ? String(body.id) : null;
+    }
   } catch {
     // query-only notifications are fine
   }
@@ -42,7 +51,11 @@ export async function handleMercadoPagoWebhook(request: Request): Promise<Respon
     }
 
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { error } = await supabaseAdmin.rpc("confirm_live_payment", {
+    const adminRpc = supabaseAdmin.rpc as unknown as (
+      fn: string,
+      args: Record<string, unknown>,
+    ) => Promise<{ error: { message: string } | null }>;
+    const { error } = await adminRpc("confirm_live_payment", {
       _order_id: orderId,
       _provider: "mercadopago",
       _external_id: String(payment.id),
@@ -67,6 +80,25 @@ export async function handleMercadoPagoWebhook(request: Request): Promise<Respon
         });
       }
     }
+
+    // Non-blocking buyer confirmation email (uses Resend when RESEND_API_KEY is set, otherwise logs stub).
+    void (async () => {
+      try {
+        const { data: order } = await supabaseAdmin.from("orders").select("buyer_id,subtotal,shipping_total").eq("id", orderId).maybeSingle();
+        if (!order?.buyer_id) return;
+        const { data: userRes } = await supabaseAdmin.auth.admin.getUserById(order.buyer_id);
+        const email = userRes?.user?.email;
+        if (!email) return;
+        const total = Number(order.subtotal ?? 0) + Number(order.shipping_total ?? 0);
+        await sendTransactionalEmail({
+          to: email,
+          subject: `Pagamento confirmado — Pedido PokePlace #${orderId.slice(0, 8)}`,
+          text: `Seu pagamento de R$ ${total.toFixed(2).replace(".", ",")} via Mercado Pago foi confirmado. A loja já foi avisada para preparar o envio.`,
+        });
+      } catch {
+        /* never fail webhook because of notification */
+      }
+    })();
 
     return new Response(JSON.stringify({ ok: true, orderId }), {
       status: 200,

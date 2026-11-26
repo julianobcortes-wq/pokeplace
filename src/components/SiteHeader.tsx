@@ -85,7 +85,7 @@ export function SiteHeader() {
         <nav className="hidden items-center gap-1 text-sm lg:flex">
           <Link to="/" className={nav} activeOptions={{ exact: true }}>Marketplace</Link>
           <Link to="/colecoes" className={nav}>Coleções</Link>
-          <Link to="/canais" className={nav}>Canais</Link>
+          <Link to="/canais" search={{ seller: "loja-local" }} className={nav}>Canais</Link>
           <Link to="/vender" className={nav}>Vender</Link>
           <Link to="/colecao" className={nav}>Meu acervo</Link>
           {roles.includes("seller") && <Link to="/minha-loja" className={nav}>Minha loja</Link>}

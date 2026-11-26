@@ -1,5 +1,7 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
-import { PageShell } from "@/components/SiteHeader";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { useMemo, useState } from "react";
+import { SlidersHorizontal, X } from "lucide-react";
+import { PageShell, SearchBox } from "@/components/SiteHeader";
 import { CardGrid } from "@/components/CardGrid";
 import { listSets, searchCards } from "@/lib/catalog.functions";
 import { BRAND } from "@/lib/format";
@@ -8,9 +10,9 @@ type S = { q?: string | undefined; set?: string | undefined; rarity?: string | u
 
 export const Route = createFileRoute("/busca")({
   validateSearch: (s: Record<string, unknown>): S => ({
-    q: typeof s["q"] === "string" ? s["q"] : undefined,
-    set: typeof s["set"] === "string" ? s["set"] : undefined,
-    rarity: typeof s["rarity"] === "string" ? s["rarity"] : undefined,
+    q: typeof s["q"] === "string" && s["q"].trim() ? s["q"] : undefined,
+    set: typeof s["set"] === "string" && s["set"].trim() ? s["set"] : undefined,
+    rarity: typeof s["rarity"] === "string" && s["rarity"].trim() ? s["rarity"] : undefined,
   }),
   loaderDeps: ({ search }) => search,
   loader: async ({ deps }) => {
@@ -33,23 +35,175 @@ export const Route = createFileRoute("/busca")({
 function SearchPage() {
   const { cards, sets } = Route.useLoaderData();
   const s = Route.useSearch();
+  const nav = useNavigate();
+  const [sort, setSort] = useState<"relevance" | "name-asc" | "name-desc" | "number">("relevance");
+
+  const rarities = useMemo(() => [...new Set(cards.map((c) => c.rarity).filter(Boolean))] as string[], [cards]);
+  const activeSet = sets.find((x) => x.id === s.set);
+
+  const sorted = useMemo(() => {
+    if (sort === "name-asc") return [...cards].sort((a, b) => a.name.localeCompare(b.name));
+    if (sort === "name-desc") return [...cards].sort((a, b) => b.name.localeCompare(a.name));
+    if (sort === "number") return [...cards].sort((a, b) => a.number.localeCompare(b.number, undefined, { numeric: true }));
+    return cards;
+  }, [cards, sort]);
+
+  const hasFilters = Boolean(s.q || s.set || s.rarity);
+
   return (
     <PageShell>
-      <main className="mx-auto flex max-w-7xl gap-6 px-4 py-6">
-        <aside className="hidden w-56 shrink-0 md:block">
-          <h1 className="text-xl font-semibold">{s.q ? `“${s.q}”` : "Todas as cartas"}</h1>
-          <p className="text-sm text-muted-foreground">{cards.length}{cards.length === 120 ? "+" : ""} resultados</p>
-          <h3 className="mt-6 font-semibold">Coleção</h3>
-          <div className="mt-2 space-y-1.5 text-sm">
-            <Link to="/busca" search={{ ...s, set: undefined }} className={!s.set ? "font-bold" : "text-muted-foreground hover:text-primary"}>Todas</Link>
-            {sets.map((x) => (
-              <Link key={x.id} to="/busca" search={{ ...s, set: x.id }} className={`block ${s.set === x.id ? "font-bold" : "text-muted-foreground hover:text-primary"}`}>{x.name}</Link>
-            ))}
+      <section className="grain bg-ink-glow text-ink-foreground">
+        <div className="mx-auto max-w-7xl px-4 py-8 md:py-10">
+          <p className="num text-[11px] uppercase tracking-[0.2em] text-holo">Busca no catálogo</p>
+          <div className="mt-2 flex flex-wrap items-end justify-between gap-4">
+            <div>
+              <h1 className="text-3xl font-extrabold md:text-4xl">{s.q ? `Resultados para “${s.q}”` : activeSet ? activeSet.name : "Todas as cartas"}</h1>
+              <p className="mt-1 text-sm opacity-75">
+                {sorted.length}
+                {sorted.length === 120 ? "+" : ""} {sorted.length === 1 ? "carta encontrada" : "cartas encontradas"}
+              </p>
+            </div>
+            <div className="w-full max-w-md text-foreground">
+              <SearchBox />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <main className="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-8 md:flex-row">
+        <aside className="hidden w-60 shrink-0 md:block">
+          <div className="sticky top-24 rounded-2xl border border-border bg-card p-4 shadow-slab">
+            <div className="flex items-center justify-between">
+              <h2 className="flex items-center gap-1.5 text-sm font-bold">
+                <SlidersHorizontal className="h-4 w-4 text-primary" /> Filtros
+              </h2>
+              {hasFilters && (
+                <Link to="/busca" search={{ q: undefined, set: undefined, rarity: undefined }} className="text-xs font-semibold text-primary hover:underline">
+                  Limpar
+                </Link>
+              )}
+            </div>
+
+            <h3 className="mt-4 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Coleção</h3>
+            <div className="mt-2 max-h-[55vh] space-y-1 overflow-y-auto pr-1 text-sm">
+              <Link
+                to="/busca"
+                search={{ ...s, set: undefined }}
+                className={`block rounded-lg px-2.5 py-1.5 transition ${!s.set ? "bg-ink font-semibold text-ink-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
+              >
+                Todas as coleções
+              </Link>
+              {sets.map((x) => (
+                <Link
+                  key={x.id}
+                  to="/busca"
+                  search={{ ...s, set: x.id }}
+                  className={`flex items-center justify-between rounded-lg px-2.5 py-1.5 transition ${
+                    s.set === x.id ? "bg-ink font-semibold text-ink-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  }`}
+                >
+                  <span className="truncate">{x.name}</span>
+                  <span className="num ml-2 text-[10px] opacity-65">{x.release_date?.slice(0, 4)}</span>
+                </Link>
+              ))}
+            </div>
           </div>
         </aside>
-        <section className="flex-1">
-          {cards.length === 0 ? <p className="rounded-md bg-card p-10 text-center text-muted-foreground">Nenhuma carta encontrada. Tente o nome em inglês (ex.: “Charizard”) ou o número (ex.: “4/102”).</p>
-            : <CardGrid cards={cards} />}
+
+        <section className="min-w-0 flex-1">
+          <div className="mb-5 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-border bg-card p-3 shadow-slab">
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={s.set ?? ""}
+                onChange={(e) => nav({ to: "/busca", search: { ...s, set: e.target.value || undefined } })}
+                aria-label="Filtrar por coleção"
+                className="rounded-full border border-input bg-background px-3 py-1.5 text-sm md:hidden"
+              >
+                <option value="">Todas as coleções</option>
+                {sets.map((x) => (
+                  <option key={x.id} value={x.id}>
+                    {x.name}
+                  </option>
+                ))}
+              </select>
+
+              {rarities.length > 0 && (
+                <select
+                  value={s.rarity ?? ""}
+                  onChange={(e) => nav({ to: "/busca", search: { ...s, rarity: e.target.value || undefined } })}
+                  aria-label="Filtrar por raridade"
+                  className="rounded-full border border-input bg-background px-3 py-1.5 text-sm"
+                >
+                  <option value="">Todas as raridades</option>
+                  {rarities.map((r) => (
+                    <option key={r} value={r}>
+                      {r}
+                    </option>
+                  ))}
+                </select>
+              )}
+
+              {s.q && (
+                <Link
+                  to="/busca"
+                  search={{ ...s, q: undefined }}
+                  className="inline-flex items-center gap-1 rounded-full bg-muted px-3 py-1 text-xs font-semibold hover:bg-muted/80"
+                >
+                  “{s.q}” <X className="h-3 w-3" />
+                </Link>
+              )}
+              {activeSet && (
+                <Link
+                  to="/busca"
+                  search={{ ...s, set: undefined }}
+                  className="inline-flex items-center gap-1 rounded-full bg-muted px-3 py-1 text-xs font-semibold hover:bg-muted/80"
+                >
+                  {activeSet.name} <X className="h-3 w-3" />
+                </Link>
+              )}
+              {s.rarity && (
+                <Link
+                  to="/busca"
+                  search={{ ...s, rarity: undefined }}
+                  className="inline-flex items-center gap-1 rounded-full bg-muted px-3 py-1 text-xs font-semibold hover:bg-muted/80"
+                >
+                  {s.rarity} <X className="h-3 w-3" />
+                </Link>
+              )}
+            </div>
+
+            <select
+              value={sort}
+              onChange={(e) => setSort(e.target.value as typeof sort)}
+              aria-label="Ordenar resultados"
+              className="rounded-full border border-input bg-background px-3 py-1.5 text-sm"
+            >
+              <option value="relevance">Relevância</option>
+              <option value="name-asc">Nome (A–Z)</option>
+              <option value="name-desc">Nome (Z–A)</option>
+              <option value="number">Número da carta</option>
+            </select>
+          </div>
+
+          {sorted.length === 0 ? (
+            <div className="dots rounded-3xl border border-dashed border-border p-10 text-center">
+              <p className="font-display text-lg font-bold">Nenhuma carta encontrada</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Tente o nome em inglês (ex.: “Charizard”, “Umbreon”) ou o número (ex.: “4/102”).
+              </p>
+              {hasFilters && (
+                <Link
+                  to="/busca"
+                  search={{ q: undefined, set: undefined, rarity: undefined }}
+                  className="mt-4 inline-block rounded-full bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground"
+                >
+                  Ver todas as cartas
+                </Link>
+              )}
+            </div>
+          ) : (
+            <CardGrid cards={sorted} />
+          )}
         </section>
       </main>
     </PageShell>

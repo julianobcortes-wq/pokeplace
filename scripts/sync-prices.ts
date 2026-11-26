@@ -3,8 +3,10 @@
  * Usage: bun scripts/sync-prices.ts [--limit=200]
  * Needs SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY.
  */
-const url = process.env.SUPABASE_URL!;
-const key = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+import { tcgdexCandidateIds } from "../src/lib/pricing/quote";
+
+const url = process.env["SUPABASE_URL"]!;
+const key = process.env["SUPABASE_SERVICE_ROLE_KEY"]!;
 if (!url || !key) {
   console.error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
   process.exit(1);
@@ -15,7 +17,7 @@ const headers: Record<string, string> = {
   "Content-Type": "application/json",
   Prefer: "return=minimal",
 };
-if (!key.startsWith("sb_")) headers.Authorization = `Bearer ${key}`;
+if (!key.startsWith("sb_")) headers["Authorization"] = `Bearer ${key}`;
 
 const limitArg = process.argv.find((a) => a.startsWith("--limit="));
 const limit = limitArg ? Number(limitArg.split("=")[1]) : 500;
@@ -32,7 +34,7 @@ type CardRow = { id: string };
 type Variant = {
   pricing?: {
     tcgplayer?: { unit?: string; holofoil?: { marketPrice?: number }; normal?: { marketPrice?: number }; reverseHolofoil?: { marketPrice?: number } };
-    cardmarket?: { unit?: string; avg?: number | null; avg7?: number | null };
+    cardmarket?: { unit?: string; avg?: number | null; avg7?: number | null; trend?: number | null };
   };
 };
 
@@ -48,25 +50,36 @@ let miss = 0;
 
 for (const card of cards) {
   try {
-    const res = await fetch(`https://api.tcgdex.net/v2/en/cards/${encodeURIComponent(card.id)}`);
-    if (!res.ok) {
+    let body: { variants_detailed?: Variant[]; pricing?: Variant["pricing"] } | null = null;
+    let resolvedId = card.id;
+    for (const candidate of tcgdexCandidateIds(card.id)) {
+      const res = await fetch(`https://api.tcgdex.net/v2/en/cards/${encodeURIComponent(candidate)}`);
+      if (!res.ok) continue;
+      body = (await res.json()) as { variants_detailed?: Variant[]; pricing?: Variant["pricing"] };
+      resolvedId = candidate;
+      break;
+    }
+    if (!body) {
       miss++;
       continue;
     }
-    const body = (await res.json()) as { variants_detailed?: Variant[]; pricing?: Variant["pricing"] };
     const variants = body.variants_detailed ?? [];
+    const blocks = [...variants.map((v) => v.pricing), body.pricing].filter(Boolean);
     const rows: Record<string, unknown>[] = [];
+    let hasUs = false;
+    let hasEu = false;
 
-    for (const v of variants.length ? variants : [{ pricing: body.pricing }]) {
-      const tcg = v.pricing?.tcgplayer;
+    for (const pricing of blocks) {
+      const tcg = pricing?.tcgplayer;
       const bucket = tcg?.holofoil ?? tcg?.normal ?? tcg?.reverseHolofoil;
       const usd = bucket?.marketPrice;
-      if (usd != null && Number.isFinite(usd) && usd > 0) {
+      if (!hasUs && usd != null && Number.isFinite(usd) && usd > 0) {
+        hasUs = true;
         rows.push({
           card_id: card.id,
           market_code: "US",
           source: "tcgdex",
-          source_url: `https://api.tcgdex.net/v2/en/cards/${card.id}`,
+          source_url: `https://api.tcgdex.net/v2/en/cards/${resolvedId}`,
           price_type: "market",
           language: "en",
           finish: tcg?.holofoil ? "holo" : tcg?.reverseHolofoil ? "reverse" : "normal",
@@ -77,14 +90,15 @@ for (const card of cards) {
           observed_at: now,
         });
       }
-      const cm = v.pricing?.cardmarket;
-      const eur = cm?.avg7 ?? cm?.avg;
-      if (eur != null && Number.isFinite(eur) && eur > 0) {
+      const cm = pricing?.cardmarket;
+      const eur = cm?.trend ?? cm?.avg7 ?? cm?.avg;
+      if (!hasEu && eur != null && Number.isFinite(eur) && eur > 0) {
+        hasEu = true;
         rows.push({
           card_id: card.id,
           market_code: "EU",
           source: "tcgdex",
-          source_url: `https://api.tcgdex.net/v2/en/cards/${card.id}`,
+          source_url: `https://api.tcgdex.net/v2/en/cards/${resolvedId}`,
           price_type: "market",
           language: "en",
           finish: "normal",
@@ -95,6 +109,7 @@ for (const card of cards) {
           observed_at: now,
         });
       }
+      if (hasUs && hasEu) break;
     }
 
     if (!rows.length) {

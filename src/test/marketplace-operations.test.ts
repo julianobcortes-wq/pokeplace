@@ -1,6 +1,8 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
+
+const hasLovableCli = spawnSync("lovable", ["--version"], { stdio: "ignore" }).status === 0;
 
 function q(sql: string) {
   const r = JSON.parse(execFileSync("lovable", ["supabase", "query", sql, "--json"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }));
@@ -8,7 +10,7 @@ function q(sql: string) {
   return r.rows as Record<string, unknown>[];
 }
 
-describe("Marketplace operations rules", () => {
+describe.skipIf(!hasLovableCli)("Marketplace operations rules", () => {
   it("reserves cart stock for 15 minutes", () => {
     const [r] = q("select pg_get_functiondef('public.place_order(jsonb,jsonb)'::regprocedure) d");
     expect(String(r?.["d"])).toContain("interval '15 minutes'");

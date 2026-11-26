@@ -32,7 +32,7 @@ export function ReviewForm({ orderId, sellerId, storeName }: { orderId: string; 
         {([["s", "Atendimento"], ["p", "Embalagem"], ["e", "Prazo"]] as const).map(([k, l]) => (
           <div key={k}><p className="text-xs text-muted-foreground">{l}</p>
             <div className="flex">{[1, 2, 3, 4, 5].map((n) => (
-              <Button key={n} type="button" aria-label={`${l} ${n}`} onClick={() => setR({ ...r, [k]: n })}>
+              <Button key={n} type="button" variant="ghost" size="icon" aria-label={`${l} ${n}`} onClick={() => setR({ ...r, [k]: n })} className="h-8 w-8 p-0 hover:bg-transparent">
                 <Star className={`h-6 w-6 ${n <= r[k] ? "text-chart-4" : "text-border"}`} fill="currentColor" strokeWidth={0} />
               </Button>
             ))}</div>
