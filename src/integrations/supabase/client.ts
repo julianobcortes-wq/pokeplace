@@ -2,6 +2,7 @@
 import { createClient } from '@supabase/supabase-js';
 import type { Database } from './types';
 import { brokeredPreviewStorage } from './previewAuthStorage';
+import { readBrowserPublicConfig } from '@/lib/runtime-config';
 
 function isNewSupabaseApiKey(value: string): boolean {
   return value.startsWith('sb_publishable_') || value.startsWith('sb_secret_');
@@ -47,10 +48,11 @@ function createSupabaseFetch(supabaseUrl: string, supabaseKey: string): typeof f
 
 
 function createSupabaseClient() {
-  // Use import.meta.env for client-side (Vite build-time replacement)
-  // Fall back to process.env for SSR (server-side rendering)
-  const configuredUrl = import.meta.env['VITE_SUPABASE_URL'] || process.env['SUPABASE_URL'];
-  const configuredKey = import.meta.env['VITE_SUPABASE_PUBLISHABLE_KEY'] || process.env['SUPABASE_PUBLISHABLE_KEY'];
+  // Prefer Vite build-time env, then SSR-injected public meta tags in browser, then process.env on server.
+  const browserCfg = readBrowserPublicConfig();
+  const serverEnv = typeof process !== 'undefined' ? process.env : undefined;
+  const configuredUrl = import.meta.env['VITE_SUPABASE_URL'] || browserCfg.supabaseUrl || serverEnv?.['SUPABASE_URL'];
+  const configuredKey = import.meta.env['VITE_SUPABASE_PUBLISHABLE_KEY'] || browserCfg.supabasePublishableKey || serverEnv?.['SUPABASE_PUBLISHABLE_KEY'];
   // Local boot without Lovable/Supabase. Catalog reads the seeded snapshot; this client is not a live backend.
   const SUPABASE_URL = configuredUrl || 'http://127.0.0.1:54321';
   const SUPABASE_PUBLISHABLE_KEY = configuredKey || 'local-dev-publishable';

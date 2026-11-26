@@ -14,7 +14,8 @@
     "test:watch": "vitest",
     "catalog:import": "bun scripts/import-catalog.ts",
     "prices:sync": "bun scripts/sync-prices.ts",
-    "db:apply": "bash scripts/apply-migrations.sh"
+    "db:apply": "bash scripts/apply-migrations.sh",
+    "launch:check": "bun scripts/launch-check.ts"
   },
   "overrides": {
     "rolldown": "1.2.1"

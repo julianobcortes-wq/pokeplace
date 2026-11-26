@@ -14,6 +14,7 @@ import { CartProvider } from "../lib/cart";
 import { Toaster } from "../components/ui/sonner";
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
+import { getPublicRuntimeConfig } from "../lib/runtime-config";
 
 function NotFoundComponent() {
   return (
@@ -76,7 +77,9 @@ function ErrorComponent({ error, reset }: ErrorComponentProps) {
 }
 
 export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
-  head: () => ({
+  loader: () => getPublicRuntimeConfig(),
+  staleTime: Infinity,
+  head: ({ loaderData }) => ({
     // Replace these placeholders with the app's name and description when first building the app.
     // Each content route, / included, must still set its own head(). Never add og:image or
     // twitter:image here: every page without its own would inherit the root's preview image.
@@ -85,10 +88,12 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       { title: "PokePlace" },
       { name: "description", content: "Marketplace e inteligência de preços de Pokémon TCG" },
-            { property: "og:title", content: "PokePlace" },
+      { property: "og:title", content: "PokePlace" },
       { property: "og:description", content: "Marketplace e inteligência de preços de Pokémon TCG" },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
+      ...(loaderData?.supabaseUrl ? [{ name: "pokeplace:supabase-url", content: loaderData.supabaseUrl }] : []),
+      ...(loaderData?.supabasePublishableKey ? [{ name: "pokeplace:supabase-key", content: loaderData.supabasePublishableKey }] : []),
     ],
     links: [
       {
