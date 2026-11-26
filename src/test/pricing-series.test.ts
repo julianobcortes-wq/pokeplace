@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { buildReferenceSeries, seriesToTrend } from "@/lib/pricing/series";
 import { parseTcgdexCardPricing, tcgdexCandidateIds, type CardQuote } from "@/lib/pricing/quote";
+import { convertToBrl, FALLBACK_FX } from "@/lib/pricing/fx";
+import { localSets, localStats, localTrending, normalizeSetLogoUrl } from "@/lib/catalog/local";
 
 const quote: CardQuote = {
   cardId: "sv08.5-028",
@@ -98,5 +100,48 @@ describe("buildReferenceSeries", () => {
     const points = buildReferenceSeries(euroWindows, 30);
     expect(points.length).toBe(30);
     expect(points.every((p) => p.source === "demo")).toBe(true);
+    expect(points.at(-1)?.amount).toBe(1.81);
+  });
+
+  it("produces organic non-flat history before day -30 on 90D window charts", () => {
+    const points = buildReferenceSeries(quote, 90, "cardmarket");
+    expect(points.length).toBe(90);
+    expect(points.at(-1)?.amount).toBe(1.65);
+    const earlySegment = points.slice(0, 50).map((p) => p.amount);
+    expect(new Set(earlySegment).size).toBeGreaterThan(4);
+
+    const highValueQuote: CardQuote = {
+      ...quote,
+      cardId: "base1-4",
+      cardmarket: { trend: 331.18, avg: 325, low: 190, avg1: 338, avg7: 320, avg30: 298, currency: "EUR", updated: null },
+    };
+    const highPoints = buildReferenceSeries(highValueQuote, 90, "cardmarket");
+    expect(highPoints.at(-1)?.amount).toBe(331.18);
+    expect(new Set(highPoints.slice(0, 50).map((p) => p.amount)).size).toBeGreaterThan(20);
+  });
+});
+
+describe("catalog asset normalization & hero ordering", () => {
+  it("appends .webp to extensionless TCGdex logo URLs and keeps existing extensions intact", () => {
+    expect(normalizeSetLogoUrl("https://assets.tcgdex.net/en/base/base1/logo")).toBe(
+      "https://assets.tcgdex.net/en/base/base1/logo.webp",
+    );
+    expect(normalizeSetLogoUrl("https://assets.tcgdex.net/en/base/base1/logo.png")).toBe(
+      "https://assets.tcgdex.net/en/base/base1/logo.png",
+    );
+    expect(normalizeSetLogoUrl(null)).toBeNull();
+    expect(localSets().every((s) => !s.logo_url || /\.(webp|png|jpg|svg)$/i.test(s.logo_url))).toBe(true);
+  });
+
+  it("places base1-4 Charizard at center index 2 of trending hero fan and ships full catalog", () => {
+    expect(localTrending()[2]?.id).toBe("base1-4");
+    expect(localStats().cards).toBeGreaterThan(3000);
+    expect(localSets().length).toBeGreaterThanOrEqual(20);
+  });
+
+  it("converts reference series cleanly to BRL headline currency", () => {
+    const brlPoints = buildReferenceSeries(quote, 30, "tcgplayer", { currency: "BRL", multiplier: FALLBACK_FX.USD });
+    expect(brlPoints.every((p) => p.currency === "BRL")).toBe(true);
+    expect(brlPoints.at(-1)?.amount).toBe(convertToBrl(1.81, "USD", FALLBACK_FX));
   });
 });

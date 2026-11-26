@@ -2,8 +2,8 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { ArrowRight, BadgeCheck, LineChart, ShieldCheck, Store, TrendingUp } from "lucide-react";
 import { PageShell, SearchBox } from "@/components/SiteHeader";
 import { DemoBadge, Slab, useTrends } from "@/components/CardGrid";
-import { Change, HoloCard, SellerLine, Sparkline } from "@/components/market";
-import { latestListings, listSets, listStores, marketStats, trendingCards } from "@/lib/catalog.functions";
+import { Change, HoloCard, SellerLine, SetLogo, Sparkline } from "@/components/market";
+import { getTrends, latestListings, listSets, listStores, marketStats, trendingCards } from "@/lib/catalog.functions";
 import { BRAND, money } from "@/lib/format";
 
 export const Route = createFileRoute("/")({
@@ -15,7 +15,8 @@ export const Route = createFileRoute("/")({
       listStores(),
       trendingCards(),
     ]);
-    return { sets, listings, stats, stores, trending };
+    const initialTrends = await getTrends({ data: { ids: trending.map((c) => c.id) } });
+    return { sets, listings, stats, stores, trending, initialTrends };
   },
   head: () => ({
     meta: [
@@ -31,9 +32,12 @@ export const Route = createFileRoute("/")({
 });
 
 function Index() {
-  const { sets, listings, stats, stores, trending } = Route.useLoaderData();
+  const { sets, listings, stats, stores, trending, initialTrends } = Route.useLoaderData();
   const fan = trending.slice(0, 5);
-  const trends = useTrends(trending.map((c) => c.id));
+  const trends = useTrends(
+    trending.map((c) => c.id),
+    initialTrends,
+  );
   const fmt = (n: number) => n.toLocaleString("pt-BR");
   const movers = trending
     .map((c) => ({ c, t: trends[c.id] }))
@@ -276,11 +280,9 @@ function Index() {
               params={{ setId: s.id }}
               className="group grid h-32 place-items-center rounded-2xl border border-border bg-card p-4 text-center shadow-slab transition hover:-translate-y-0.5 hover:border-foreground/25"
             >
-              {s.logo_url ? (
-                <img src={s.logo_url} alt={s.name} loading="lazy" className="max-h-14 w-auto object-contain transition group-hover:scale-105" />
-              ) : (
-                <span className="font-display font-bold">{s.name}</span>
-              )}
+              <div className="flex h-16 items-center justify-center transition group-hover:scale-105">
+                <SetLogo src={s.logo_url} name={s.name} className="max-h-14 max-w-[150px]" />
+              </div>
               <span className="text-[11px] text-muted-foreground">
                 {s.total ?? "—"} cartas · {s.release_date?.slice(0, 4) ?? "—"}
               </span>

@@ -61,11 +61,14 @@ function Admin() {
 
   return (
     <PageShell>
-      <main className="mx-auto max-w-6xl space-y-5 px-4 py-8">
-        <div>
-          <p className="num text-[11px] uppercase tracking-[0.2em] text-primary">Operação</p>
-          <h1 className="mt-1 text-3xl font-extrabold">Administração</h1>
+      <section className="grain bg-ink-glow text-ink-foreground">
+        <div className="mx-auto max-w-6xl px-4 py-8 md:py-10">
+          <p className="num text-[11px] uppercase tracking-[0.2em] text-holo">Operação · {BRAND.name}</p>
+          <h1 className="mt-1.5 text-3xl font-extrabold md:text-4xl">Administração</h1>
+          <p className="mt-1 text-sm opacity-75">Curadoria de lojas, prontidão de produção, repasses e mediação de pedidos.</p>
         </div>
+      </section>
+      <main className="mx-auto max-w-6xl space-y-5 px-4 py-7">
 
         <div className="grid gap-3 md:grid-cols-4">
           {[

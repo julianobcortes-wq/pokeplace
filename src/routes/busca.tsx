@@ -1,12 +1,13 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { SlidersHorizontal, X } from "lucide-react";
-import { PageShell, SearchBox } from "@/components/SiteHeader";
+import { PageShell } from "@/components/SiteHeader";
 import { CardGrid } from "@/components/CardGrid";
-import { listSets, searchCards } from "@/lib/catalog.functions";
+import { getTrends, listSets, searchCards } from "@/lib/catalog.functions";
 import { BRAND } from "@/lib/format";
 
 type S = { q?: string | undefined; set?: string | undefined; rarity?: string | undefined };
+const PAGE_SIZE = 30;
 
 export const Route = createFileRoute("/busca")({
   validateSearch: (s: Record<string, unknown>): S => ({
@@ -17,7 +18,8 @@ export const Route = createFileRoute("/busca")({
   loaderDeps: ({ search }) => search,
   loader: async ({ deps }) => {
     const [cards, sets] = await Promise.all([searchCards({ data: { ...deps, limit: 120 } }), listSets()]);
-    return { cards, sets };
+    const initialTrends = await getTrends({ data: { ids: cards.slice(0, PAGE_SIZE).map((c) => c.id) } });
+    return { cards, sets, initialTrends };
   },
   head: () => ({
     meta: [
@@ -33,10 +35,15 @@ export const Route = createFileRoute("/busca")({
 });
 
 function SearchPage() {
-  const { cards, sets } = Route.useLoaderData();
+  const { cards, sets, initialTrends } = Route.useLoaderData();
   const s = Route.useSearch();
   const nav = useNavigate();
   const [sort, setSort] = useState<"relevance" | "name-asc" | "name-desc" | "number">("relevance");
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+  }, [s.q, s.set, s.rarity, sort]);
 
   const rarities = useMemo(() => [...new Set(cards.map((c) => c.rarity).filter(Boolean))] as string[], [cards]);
   const activeSet = sets.find((x) => x.id === s.set);
@@ -48,30 +55,40 @@ function SearchPage() {
     return cards;
   }, [cards, sort]);
 
+  const visibleCards = useMemo(() => sorted.slice(0, visibleCount), [sorted, visibleCount]);
   const hasFilters = Boolean(s.q || s.set || s.rarity);
 
   return (
     <PageShell>
       <section className="grain bg-ink-glow text-ink-foreground">
-        <div className="mx-auto max-w-7xl px-4 py-8 md:py-10">
+        <div className="mx-auto max-w-7xl px-4 py-7 md:py-9">
           <p className="num text-[11px] uppercase tracking-[0.2em] text-holo">Busca no catálogo</p>
-          <div className="mt-2 flex flex-wrap items-end justify-between gap-4">
+          <div className="mt-1.5 flex flex-wrap items-end justify-between gap-4">
             <div>
-              <h1 className="text-3xl font-extrabold md:text-4xl">{s.q ? `Resultados para “${s.q}”` : activeSet ? activeSet.name : "Todas as cartas"}</h1>
+              <h1 className="text-3xl font-extrabold md:text-4xl">
+                {s.q ? `Resultados para “${s.q}”` : activeSet ? activeSet.name : "Todas as cartas"}
+              </h1>
               <p className="mt-1 text-sm opacity-75">
                 {sorted.length}
                 {sorted.length === 120 ? "+" : ""} {sorted.length === 1 ? "carta encontrada" : "cartas encontradas"}
+                {sorted.length > visibleCards.length ? ` · exibindo ${visibleCards.length}` : ""}
               </p>
             </div>
-            <div className="w-full max-w-md text-foreground">
-              <SearchBox />
-            </div>
+            {hasFilters && (
+              <Link
+                to="/busca"
+                search={{ q: undefined, set: undefined, rarity: undefined }}
+                className="rounded-full border border-ink-foreground/20 px-4 py-1.5 text-xs font-semibold text-ink-foreground transition hover:bg-ink-foreground/10"
+              >
+                Limpar filtros
+              </Link>
+            )}
           </div>
         </div>
       </section>
 
-      <main className="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-8 md:flex-row">
-        <aside className="hidden w-60 shrink-0 md:block">
+      <main className="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-7 md:flex-row">
+        <aside className="hidden w-56 shrink-0 md:block">
           <div className="sticky top-24 rounded-2xl border border-border bg-card p-4 shadow-slab">
             <div className="flex items-center justify-between">
               <h2 className="flex items-center gap-1.5 text-sm font-bold">
@@ -202,7 +219,20 @@ function SearchPage() {
               )}
             </div>
           ) : (
-            <CardGrid cards={sorted} />
+            <>
+              <CardGrid cards={visibleCards} initialTrends={initialTrends} columns="sidebar" />
+              {visibleCards.length < sorted.length && (
+                <div className="mt-8 flex justify-center">
+                  <button
+                    type="button"
+                    onClick={() => setVisibleCount((n) => n + PAGE_SIZE)}
+                    className="rounded-full border border-border bg-card px-6 py-2.5 text-sm font-semibold text-foreground shadow-slab transition hover:border-foreground/30 hover:bg-muted"
+                  >
+                    Mostrar mais cartas ({sorted.length - visibleCards.length} restantes)
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </section>
       </main>

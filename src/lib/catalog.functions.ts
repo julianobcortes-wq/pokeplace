@@ -1,11 +1,80 @@
 import { createServerFn } from "@tanstack/react-start";
 import { publicDb } from "./public-db";
 import { catalogSearchInput } from "./catalog-validation";
-import { localCard, localCardsBySet, localSearch, localSets, localStats, localTrending, type LocalSet } from "./catalog/local";
+import {
+  localCard,
+  localCardsBySet,
+  localSearch,
+  localSets,
+  localStats,
+  localTrending,
+  normalizeSetLogoUrl,
+  type LocalCard,
+  type LocalSet,
+} from "./catalog/local";
 import type { TrendSummary } from "./pricing/series";
 
 function dbConfigured() {
   return Boolean(process.env["SUPABASE_URL"] && process.env["SUPABASE_PUBLISHABLE_KEY"]);
+}
+
+const cardMetaCache = new Map<
+  string,
+  { at: number; rarity: string | null; artist: string | null; types: string[] | null; subtypes: string[] | null }
+>();
+const META_TTL = 60 * 60 * 1000;
+
+async function enrichLocalCard(card: LocalCard): Promise<LocalCard> {
+  if (card.rarity && card.artist && card.types?.length) return card;
+  const hit = cardMetaCache.get(card.id);
+  if (hit && Date.now() - hit.at < META_TTL) {
+    return {
+      ...card,
+      rarity: card.rarity ?? hit.rarity,
+      artist: card.artist ?? hit.artist,
+      types: card.types ?? hit.types,
+      subtypes: card.subtypes ?? hit.subtypes,
+    };
+  }
+  const { tcgdexCandidateIds } = await import("@/lib/pricing/quote");
+  for (const candidate of tcgdexCandidateIds(card.id)) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 2500);
+    try {
+      const res = await fetch(`https://api.tcgdex.net/v2/en/cards/${encodeURIComponent(candidate)}`, {
+        signal: ctrl.signal,
+      });
+      if (!res.ok) continue;
+      const body = (await res.json()) as {
+        rarity?: string;
+        illustrator?: string;
+        types?: string[];
+        stage?: string;
+        category?: string;
+      };
+      const meta = {
+        at: Date.now(),
+        rarity: body.rarity ?? null,
+        artist: body.illustrator ?? null,
+        types: Array.isArray(body.types) && body.types.length ? body.types : null,
+        subtypes: body.stage ? [body.stage] : null,
+      };
+      cardMetaCache.set(card.id, meta);
+      return {
+        ...card,
+        rarity: card.rarity ?? meta.rarity,
+        artist: card.artist ?? meta.artist,
+        types: card.types ?? meta.types,
+        subtypes: card.subtypes ?? meta.subtypes,
+        supertype: body.category ?? card.supertype,
+      };
+    } catch {
+      /* fallback to base card fields */
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return card;
 }
 
 export const getCard = createServerFn({ method: "GET" })
@@ -20,7 +89,8 @@ export const getCard = createServerFn({ method: "GET" })
         /* catálogo local abaixo */
       }
     }
-    return localCard(data.id);
+    const local = localCard(data.id);
+    return local ? enrichLocalCard(local) : null;
   });
 
 export const getSet = createServerFn({ method: "GET" })
@@ -36,7 +106,8 @@ export const getSet = createServerFn({ method: "GET" })
       ]);
       if (set && (cards?.length ?? 0) > 0) {
         const sorted = (cards ?? []).sort((a, b) => (parseInt(a.number) || 9999) - (parseInt(b.number) || 9999) || a.number.localeCompare(b.number));
-        return { set: set as LocalSet, cards: sorted };
+        const normalizedSet = { ...(set as LocalSet), logo_url: normalizeSetLogoUrl((set as LocalSet).logo_url) };
+        return { set: normalizedSet, cards: sorted };
       }
     } catch {
       /* catálogo local abaixo */
@@ -49,7 +120,9 @@ export const listSets = createServerFn({ method: "GET" }).handler(async (): Prom
   if (!dbConfigured()) return seeded;
   try {
     const { data, error } = await publicDb().from("card_sets").select("*").order("release_date", { ascending: false });
-    if (!error && data && data.length > 0) return data as LocalSet[];
+    if (!error && data && data.length > 0) {
+      return (data as LocalSet[]).map((s) => ({ ...s, logo_url: normalizeSetLogoUrl(s.logo_url) }));
+    }
   } catch {
     /* catálogo local abaixo */
   }
@@ -152,15 +225,28 @@ export const getTrends = createServerFn({ method: "GET" })
       }
     }
 
-    const missing = data.ids.filter((id) => !out[id]?.points?.length).slice(0, 24);
+    const missing = data.ids.filter((id) => !out[id]?.points?.length).slice(0, 40);
     if (missing.length) {
-      const { quoteCard } = await import("@/lib/pricing/quote");
-      const { buildReferenceSeries, seriesToTrend } = await import("@/lib/pricing/series");
-      const quotes = await Promise.all(missing.map((id) => quoteCard(id)));
-      for (const q of quotes) {
-        const trend = seriesToTrend(buildReferenceSeries(q, 90), q.currency ?? "USD");
-        if (trend) out[q.cardId] = trend;
-      }
+      const [{ quoteCard }, { buildReferenceSeries, seriesToTrend }, { getFxRates, fxRateToBrl }] = await Promise.all([
+        import("@/lib/pricing/quote"),
+        import("@/lib/pricing/series"),
+        import("@/lib/pricing/fx"),
+      ]);
+      const fx = await getFxRates();
+      const concurrency = 8;
+      let cursor = 0;
+      const workers = Array.from({ length: Math.min(concurrency, missing.length) }, async () => {
+        while (cursor < missing.length) {
+          const idx = cursor++;
+          const id = missing[idx];
+          if (!id) continue;
+          const q = await quoteCard(id);
+          const mult = fxRateToBrl(q.currency, fx);
+          const trend = seriesToTrend(buildReferenceSeries(q, 90, undefined, { currency: "BRL", multiplier: mult }), "BRL");
+          if (trend) out[q.cardId] = trend;
+        }
+      });
+      await Promise.all(workers);
     }
     return out;
   });

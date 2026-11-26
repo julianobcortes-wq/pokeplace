@@ -13,7 +13,9 @@ import { ListingPhotos } from "@/components/ListingPhotos";
 import { Button } from "@/components/ui/button";
 import { getCard } from "@/lib/catalog.functions";
 import { getCardQuote, type CardQuote } from "@/lib/pricing/quote";
+import { convertToBrl, fxRateToBrl, getFxRatesFn, type FxRates } from "@/lib/pricing/fx";
 import { buildReferenceSeries } from "@/lib/pricing/series";
+import { isSupabaseConfigured } from "@/lib/runtime-config";
 import { supabase } from "@/integrations/supabase/client";
 import { useCart } from "@/lib/cart";
 import { useAuth } from "@/hooks/useAuth";
@@ -23,8 +25,8 @@ export const Route = createFileRoute("/carta/$cardId")({
   loader: async ({ params }) => {
     const card = await getCard({ data: { id: params.cardId } });
     if (!card) throw notFound();
-    const quote = await getCardQuote({ data: { id: params.cardId } });
-    return { card, quote };
+    const [quote, fx] = await Promise.all([getCardQuote({ data: { id: params.cardId } }), getFxRatesFn()]);
+    return { card, quote, fx };
   },
   head: ({ loaderData }) => {
     const c = loaderData?.card;
@@ -47,15 +49,17 @@ export const Route = createFileRoute("/carta/$cardId")({
 });
 
 function CardPage() {
-  const { card, quote } = Route.useLoaderData();
+  const { card, quote, fx } = Route.useLoaderData();
   const cart = useCart();
   const { roles } = useAuth();
   const nav = useNavigate();
   const [cond, setCond] = useState("");
   const [lang, setLang] = useState("");
+  const supabaseReady = isSupabaseConfigured();
 
   const { data: offers = [], isLoading } = useQuery({
     queryKey: ["offers", card.id],
+    enabled: supabaseReady,
     queryFn: async () => {
       try {
         const { data, error } = await supabase.rpc("get_card_offers", { _card_id: card.id });
@@ -69,6 +73,7 @@ function CardPage() {
 
   const { data: photos = [] } = useQuery({
     queryKey: ["offer-photos", card.id],
+    enabled: supabaseReady,
     queryFn: async () => {
       try {
         const { data, error } = await supabase.from("listings").select("id,photo_paths").eq("card_id", card.id).eq("status", "active");
@@ -83,6 +88,20 @@ function CardPage() {
   const shown = offers.filter((o) => (!cond || o.condition === cond) && (!lang || o.language === lang));
   const best = shown[0];
   const sellLink = roles.includes("seller") ? "/minha-loja" : "/vender";
+  const refSpotBrl =
+    quote?.available && quote.price != null && quote.currency
+      ? {
+          brl: money(convertToBrl(quote.price, quote.currency, fx), "BRL"),
+          intl: [
+            quote.tcgplayer ? money(quote.tcgplayer.market, quote.tcgplayer.currency) : null,
+            quote.cardmarket
+              ? money(quote.cardmarket.trend ?? quote.cardmarket.avg ?? quote.cardmarket.avg7 ?? 0, quote.cardmarket.currency)
+              : null,
+          ]
+            .filter(Boolean)
+            .join(" · "),
+        }
+      : null;
 
   const add = (o: (typeof offers)[number]) => {
     cart.add({
@@ -103,8 +122,8 @@ function CardPage() {
     <PageShell>
       <section className="grain relative overflow-hidden bg-ink-glow text-ink-foreground">
         <div className="pointer-events-none absolute -left-32 top-10 h-96 w-96 rounded-full bg-holo opacity-15 blur-3xl" />
-        <div className="relative mx-auto grid max-w-7xl gap-8 px-4 py-8 lg:grid-cols-[360px_1fr] lg:py-14">
-          <div className="mx-auto w-64 sm:w-80 lg:w-full">
+        <div className="relative mx-auto grid max-w-7xl items-start gap-8 px-4 pb-14 pt-8 lg:grid-cols-[340px_1fr] lg:pb-16 lg:pt-12">
+          <div className="mx-auto w-60 sm:w-72 lg:w-full">
             <HoloCard src={card.image_large ?? card.image_small} alt={card.name} eager className="shadow-float ring-1 ring-ink-foreground/10" />
           </div>
           <div className="animate-rise min-w-0">
@@ -129,48 +148,67 @@ function CardPage() {
             </div>
             <CollectionActions cardId={card.id} />
 
-            <MarketQuote quote={quote} sellLink={sellLink} />
+            <div className="mt-6 grid gap-3 md:grid-cols-2">
+              <div className="flex flex-col justify-between rounded-2xl border border-ink-foreground/10 bg-ink-foreground/5 p-5">
+                <div>
+                  <p className="text-xs uppercase tracking-wider opacity-60">Menor preço nas lojas</p>
+                  {best ? (
+                    <>
+                      <p className="num mt-1 text-4xl font-bold">{money(Number(best.price), best.currency)}</p>
+                      <p className="mt-1 text-xs opacity-70">
+                        {CONDITIONS[best.condition]} · {LANGUAGES[best.language] ?? best.language} · {best.store_name}
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="mt-1.5 text-lg font-semibold">
+                        {supabaseReady && isLoading ? "Buscando ofertas…" : "Nenhuma loja vende esta carta agora"}
+                      </p>
+                      <p className="mt-1 text-xs opacity-65">Tem esta carta no seu estoque? Seja a primeira loja a anunciar.</p>
+                      {refSpotBrl && (
+                        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+                          <span className="inline-flex items-center gap-1.5 rounded-full border border-ink-foreground/15 bg-ink/40 px-3 py-1">
+                            <Globe2 className="h-3.5 w-3.5 text-holo" />
+                            <span className="opacity-70">Ref. Brasil:</span>
+                            <b className="num text-ink-foreground">{refSpotBrl.brl}</b>
+                          </span>
+                          {refSpotBrl.intl && <span className="num opacity-65">({refSpotBrl.intl})</span>}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
 
-            <div className="mt-4 grid gap-3 md:grid-cols-2">
-              <div className="rounded-2xl border border-ink-foreground/10 bg-ink-foreground/5 p-5">
-                <p className="text-xs uppercase tracking-wider opacity-60">Menor preço nas lojas PokePlace</p>
                 {best ? (
-                  <>
-                    <p className="num mt-1 text-4xl font-bold">{money(Number(best.price), best.currency)}</p>
-                    <p className="mt-1 text-xs opacity-70">
-                      {CONDITIONS[best.condition]} · {LANGUAGES[best.language] ?? best.language} · {best.store_name}
-                    </p>
-                    <div className="mt-4 flex gap-2">
-                      <Button
-                        onClick={() => {
-                          add(best);
-                          nav({ to: "/carrinho" });
-                        }}
-                        className="flex-1 rounded-full bg-primary py-3 font-semibold text-primary-foreground transition hover:opacity-90"
-                      >
-                        Comprar agora
-                      </Button>
-                      <Button onClick={() => add(best)} aria-label="Adicionar ao carrinho" className="rounded-full bg-ink-foreground px-4 text-ink">
-                        <ShoppingBag className="h-5 w-5" />
-                      </Button>
-                    </div>
-                  </>
+                  <div className="mt-4 flex gap-2">
+                    <Button
+                      onClick={() => {
+                        add(best);
+                        nav({ to: "/carrinho" });
+                      }}
+                      className="flex-1 rounded-full bg-primary py-3 font-semibold text-primary-foreground transition hover:opacity-90"
+                    >
+                      Comprar agora
+                    </Button>
+                    <Button onClick={() => add(best)} aria-label="Adicionar ao carrinho" className="rounded-full bg-ink-foreground px-4 text-ink">
+                      <ShoppingBag className="h-5 w-5" />
+                    </Button>
+                  </div>
                 ) : (
-                  <>
-                    <p className="mt-1 text-lg font-semibold">{isLoading ? "Buscando ofertas…" : "Nenhuma loja vende esta carta agora"}</p>
-                    <p className="mt-1 text-xs opacity-60">Tem esta carta no seu estoque? Seja a primeira loja a anunciar.</p>
+                  <div className="mt-4">
                     <Link
                       to={sellLink}
-                      className="mt-4 inline-flex items-center gap-1.5 rounded-full bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition hover:opacity-90"
+                      className="inline-flex items-center gap-1.5 rounded-full bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition hover:opacity-90"
                     >
                       Vender esta carta <ArrowUpRight className="h-4 w-4" />
                     </Link>
-                  </>
+                  </div>
                 )}
               </div>
+
               <div className="rounded-2xl border border-ink-foreground/10 bg-ink-foreground/5 p-5">
                 <p className="text-xs uppercase tracking-wider opacity-60">Ficha técnica</p>
-                <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
+                <dl className="mt-2.5 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
                   <dt className="opacity-60">Código</dt>
                   <dd className="num">{card.id}</dd>
                   <dt className="opacity-60">Série</dt>
@@ -189,7 +227,7 @@ function CardPage() {
       </section>
 
       <main className="mx-auto max-w-7xl px-4">
-        <PriceHistory cardId={card.id} quote={quote} />
+        <PriceHistory cardId={card.id} quote={quote} fx={fx} />
 
         <section className="mt-8">
           <div className="flex flex-wrap items-end justify-between gap-3">
@@ -331,109 +369,16 @@ const RANGES = [
   { l: "Tudo", d: null, pro: true },
 ] as const;
 
-function MarketQuote({ quote, sellLink }: { quote: CardQuote | undefined; sellLink: "/vender" | "/minha-loja" }) {
-  const tcg = quote?.tcgplayer;
-  const cm = quote?.cardmarket;
-
-  return (
-    <div className="mt-5 rounded-2xl border border-ink-foreground/10 bg-ink-foreground/5 p-5">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="inline-flex items-center gap-1.5 text-xs uppercase tracking-wider opacity-60">
-          <Globe2 className="h-3.5 w-3.5" /> Inteligência de preços (TCGdex)
-        </p>
-        {quote?.asOf && (
-          <span className="num text-[11px] opacity-55">Atualizado em {new Date(quote.asOf).toLocaleDateString("pt-BR")}</span>
-        )}
-      </div>
-
-      {quote?.available ? (
-        <div className="mt-3 grid gap-3 sm:grid-cols-2">
-          {tcg && (
-            <div className="rounded-xl border border-ink-foreground/10 bg-ink/40 p-3.5">
-              <div className="flex items-center justify-between text-[11px] opacity-70">
-                <span>TCGplayer · EUA</span>
-                <span>{tcg.finish}</span>
-              </div>
-              <p className="num mt-1 text-3xl font-bold">{money(tcg.market, tcg.currency)}</p>
-              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs opacity-70">
-                {tcg.low != null && (
-                  <span>
-                    Mín: <b className="num text-ink-foreground">{money(tcg.low, tcg.currency)}</b>
-                  </span>
-                )}
-                {tcg.mid != null && (
-                  <span>
-                    Med: <b className="num text-ink-foreground">{money(tcg.mid, tcg.currency)}</b>
-                  </span>
-                )}
-              </div>
-            </div>
-          )}
-          {cm && (
-            <div className="rounded-xl border border-ink-foreground/10 bg-ink/40 p-3.5">
-              <div className="flex items-center justify-between text-[11px] opacity-70">
-                <span>Cardmarket · Europa</span>
-                <span>Tendência</span>
-              </div>
-              <p className="num mt-1 text-3xl font-bold">{money(cm.trend ?? cm.avg ?? cm.avg7 ?? 0, cm.currency)}</p>
-              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs opacity-70">
-                {cm.avg7 != null && (
-                  <span>
-                    7D: <b className="num text-ink-foreground">{money(cm.avg7, cm.currency)}</b>
-                  </span>
-                )}
-                {cm.avg30 != null && (
-                  <span>
-                    30D: <b className="num text-ink-foreground">{money(cm.avg30, cm.currency)}</b>
-                  </span>
-                )}
-                {cm.low != null && (
-                  <span>
-                    Mín: <b className="num text-ink-foreground">{money(cm.low, cm.currency)}</b>
-                  </span>
-                )}
-              </div>
-            </div>
-          )}
-          {!tcg && !cm && quote.price != null && quote.currency && (
-            <div className="rounded-xl border border-ink-foreground/10 bg-ink/40 p-3.5 sm:col-span-2">
-              <p className="text-xs opacity-70">{quote.sourceLabel}</p>
-              <p className="num mt-1 text-3xl font-bold">{money(quote.price, quote.currency)}</p>
-            </div>
-          )}
-        </div>
-      ) : (
-        <p className="mt-2 text-sm opacity-80">{quote ? quote.note : "Consultando a fonte pública…"}</p>
-      )}
-
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-xs">
-        <p className="max-w-lg opacity-60">{quote?.note}</p>
-        <div className="flex flex-wrap gap-2 text-sm">
-          <Link to={sellLink} className="rounded-full bg-primary px-4 py-1.5 font-semibold text-primary-foreground transition hover:opacity-90">
-            Anunciar carta
-          </Link>
-          <Link
-            to="/canais"
-            search={{ seller: "loja-local" }}
-            className="rounded-full border border-ink-foreground/20 px-4 py-1.5 font-semibold transition hover:bg-ink-foreground/10"
-          >
-            Canais
-          </Link>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function PriceHistory({ cardId, quote }: { cardId: string; quote: CardQuote | undefined }) {
+function PriceHistory({ cardId, quote, fx }: { cardId: string; quote: CardQuote | undefined; fx: FxRates }) {
   const [r, setR] = useState<(typeof RANGES)[number]>(RANGES[2]);
   const hasTcg = Boolean(quote?.tcgplayer);
   const hasCm = Boolean(quote?.cardmarket);
-  const defaultMarket: "tcgplayer" | "cardmarket" = hasCm && !hasTcg ? "cardmarket" : "tcgplayer";
-  const [market, setMarket] = useState<"tcgplayer" | "cardmarket">(defaultMarket);
+  const [viewMode, setViewMode] = useState<"brl" | "tcgplayer" | "cardmarket">("brl");
+  const supabaseReady = isSupabaseConfigured();
 
   const { data, isLoading } = useQuery({
     queryKey: ["history", cardId, r.d],
+    enabled: supabaseReady,
     queryFn: async () => {
       try {
         const { data, error } = await supabase.rpc("get_price_history", { _card_id: cardId, _days: r.d as number });
@@ -457,11 +402,19 @@ function PriceHistory({ cardId, quote }: { cardId: string; quote: CardQuote | un
   // When DB has no rows yet and user clicks a Pro timeframe (6M, 1A, Tudo), honor the Pro gate consistently.
   const locked = dbLocked || (dbPoints.length === 0 && r.pro);
 
-  const activeMarket = market === "cardmarket" && hasCm ? "cardmarket" : market === "tcgplayer" && hasTcg ? "tcgplayer" : defaultMarket;
+  const activeMode: "brl" | "tcgplayer" | "cardmarket" =
+    viewMode === "cardmarket" && hasCm ? "cardmarket" : viewMode === "tcgplayer" && hasTcg ? "tcgplayer" : "brl";
+
   const fallbackSeries = useMemo(() => {
     if (dbPoints.length > 0 || locked) return [];
-    return buildReferenceSeries(quote, r.d, activeMarket);
-  }, [dbPoints.length, locked, quote, r.d, activeMarket]);
+    if (activeMode === "brl") {
+      const baseMarket = hasTcg ? "tcgplayer" : hasCm ? "cardmarket" : undefined;
+      const srcCurr = baseMarket === "cardmarket" ? quote?.cardmarket?.currency : quote?.tcgplayer?.currency ?? quote?.currency;
+      const mult = fxRateToBrl(srcCurr, fx);
+      return buildReferenceSeries(quote, r.d, baseMarket, { currency: "BRL", multiplier: mult });
+    }
+    return buildReferenceSeries(quote, r.d, activeMode);
+  }, [dbPoints.length, locked, quote, r.d, activeMode, hasTcg, hasCm, fx]);
 
   const points = useMemo(() => {
     if (dbPoints.length > 0) return dbPoints;
@@ -469,9 +422,9 @@ function PriceHistory({ cardId, quote }: { cardId: string; quote: CardQuote | un
   }, [dbPoints, fallbackSeries]);
 
   const currency =
-    dbPoints.length > 0
+    dbPoints.length > 0 || activeMode === "brl"
       ? "BRL"
-      : activeMarket === "cardmarket"
+      : activeMode === "cardmarket"
         ? quote?.cardmarket?.currency ?? "EUR"
         : quote?.tcgplayer?.currency ?? quote?.currency ?? "USD";
 
@@ -485,6 +438,8 @@ function PriceHistory({ cardId, quote }: { cardId: string; quote: CardQuote | un
   const color = up ? "var(--up)" : "var(--down)";
   const fmtDate = (t: number) => new Date(t).toLocaleDateString("pt-BR", { day: "2-digit", month: "short" });
   const fmtMoney = (v: number) => money(v, currency);
+  const tcg = quote?.tcgplayer;
+  const cm = quote?.cardmarket;
 
   return (
     <section className="relative z-10 -mt-6 rounded-3xl border border-border bg-card p-5 shadow-float md:p-7">
@@ -492,8 +447,9 @@ function PriceHistory({ cardId, quote }: { cardId: string; quote: CardQuote | un
         <div>
           <div className="flex flex-wrap items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
             <span>Histórico de preço</span>
-            {fromWindows && <DemoBadge label="Médias Cardmarket" />}
-            {!fromWindows && demo && <DemoBadge label="Curva de referência" />}
+            {activeMode === "brl" && dbPoints.length === 0 && <DemoBadge label="Referência BRL · TCGdex" />}
+            {activeMode !== "brl" && fromWindows && <DemoBadge label="Médias Cardmarket" />}
+            {activeMode !== "brl" && !fromWindows && demo && <DemoBadge label="Referência TCGdex" />}
           </div>
           <div className="mt-1 flex items-baseline gap-3">
             <p className="num text-4xl font-bold">{!locked && last != null ? fmtMoney(last) : "—"}</p>
@@ -502,26 +458,39 @@ function PriceHistory({ cardId, quote }: { cardId: string; quote: CardQuote | un
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {dbPoints.length === 0 && hasTcg && hasCm && (
+          {dbPoints.length === 0 && (hasTcg || hasCm) && (
             <div className="flex rounded-full border border-border bg-muted/60 p-1 text-xs">
               <button
                 type="button"
-                onClick={() => setMarket("tcgplayer")}
+                onClick={() => setViewMode("brl")}
                 className={`rounded-full px-3 py-1 font-semibold transition ${
-                  activeMarket === "tcgplayer" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                  activeMode === "brl" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
                 }`}
               >
-                TCGplayer (USD)
+                BRL (R$)
               </button>
-              <button
-                type="button"
-                onClick={() => setMarket("cardmarket")}
-                className={`rounded-full px-3 py-1 font-semibold transition ${
-                  activeMarket === "cardmarket" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                Cardmarket (EUR)
-              </button>
+              {hasTcg && (
+                <button
+                  type="button"
+                  onClick={() => setViewMode("tcgplayer")}
+                  className={`rounded-full px-3 py-1 font-semibold transition ${
+                    activeMode === "tcgplayer" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  USD
+                </button>
+              )}
+              {hasCm && (
+                <button
+                  type="button"
+                  onClick={() => setViewMode("cardmarket")}
+                  className={`rounded-full px-3 py-1 font-semibold transition ${
+                    activeMode === "cardmarket" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  EUR
+                </button>
+              )}
             </div>
           )}
           <div className="flex rounded-full bg-muted p-1">
@@ -562,7 +531,7 @@ function PriceHistory({ cardId, quote }: { cardId: string; quote: CardQuote | un
               Conhecer planos
             </Link>
           </div>
-        ) : isLoading && points.length === 0 ? (
+        ) : supabaseReady && isLoading && points.length === 0 ? (
           <div className="flex h-full items-center justify-center rounded-2xl bg-muted text-sm text-muted-foreground">Carregando gráfico…</div>
         ) : points.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center rounded-2xl bg-muted p-6 text-center text-sm text-muted-foreground">
@@ -570,11 +539,11 @@ function PriceHistory({ cardId, quote }: { cardId: string; quote: CardQuote | un
           </div>
         ) : (
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={points} margin={{ left: 0, right: 8, top: 8, bottom: 0 }}>
+            <AreaChart data={points} margin={{ left: 0, right: 8, top: 10, bottom: 0 }}>
               <defs>
                 <linearGradient id={`pg-${cardId}`} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={color} stopOpacity={0.35} />
-                  <stop offset="100%" stopColor={color} stopOpacity={0} />
+                  <stop offset="0%" stopColor={color} stopOpacity={0.32} />
+                  <stop offset="100%" stopColor={color} stopOpacity={0.02} />
                 </linearGradient>
               </defs>
               <CartesianGrid vertical={false} stroke="var(--border)" strokeDasharray="3 4" />
@@ -586,7 +555,7 @@ function PriceHistory({ cardId, quote }: { cardId: string; quote: CardQuote | un
                 fontSize={11}
                 tickLine={false}
                 axisLine={false}
-                minTickGap={40}
+                minTickGap={44}
                 stroke="var(--muted-foreground)"
               />
               <YAxis
@@ -599,22 +568,69 @@ function PriceHistory({ cardId, quote }: { cardId: string; quote: CardQuote | un
                 stroke="var(--muted-foreground)"
               />
               <Tooltip
-                contentStyle={{ background: "var(--popover)", border: "1px solid var(--border)", borderRadius: 12, fontSize: 12 }}
+                contentStyle={{
+                  background: "var(--popover)",
+                  border: "1px solid var(--border)",
+                  borderRadius: 12,
+                  fontSize: 12,
+                  boxShadow: "0 12px 30px -12px rgba(0,0,0,0.35)",
+                }}
                 labelFormatter={(t) => new Date(Number(t)).toLocaleDateString("pt-BR")}
                 formatter={(v) => [fmtMoney(Number(v)), "Preço"]}
               />
-              <Area dataKey="price" type="monotone" stroke={color} strokeWidth={2.2} fill={`url(#pg-${cardId})`} dot={false} activeDot={{ r: 5, strokeWidth: 0 }} />
+              <Area
+                dataKey="price"
+                type="monotone"
+                stroke={color}
+                strokeWidth={2.2}
+                fill={`url(#pg-${cardId})`}
+                dot={false}
+                activeDot={{ r: 5, strokeWidth: 2, stroke: "var(--card)" }}
+              />
             </AreaChart>
           </ResponsiveContainer>
         )}
       </div>
 
+      {quote?.available && (tcg || cm) && (
+        <div className="mt-4 grid gap-2.5 border-t border-border pt-4 text-xs sm:grid-cols-2">
+          {tcg && (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-muted/60 px-3.5 py-2.5">
+              <div>
+                <p className="font-semibold text-foreground">TCGplayer · EUA ({tcg.finish})</p>
+                <p className="text-[11px] text-muted-foreground">
+                  {tcg.low != null ? `Mín ${money(tcg.low, tcg.currency)}` : ""}
+                  {tcg.low != null && tcg.mid != null ? " · " : ""}
+                  {tcg.mid != null ? `Med ${money(tcg.mid, tcg.currency)}` : ""}
+                </p>
+              </div>
+              <p className="num text-base font-bold text-foreground">{money(tcg.market, tcg.currency)}</p>
+            </div>
+          )}
+          {cm && (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-muted/60 px-3.5 py-2.5">
+              <div>
+                <p className="font-semibold text-foreground">Cardmarket · Europa</p>
+                <p className="text-[11px] text-muted-foreground">
+                  {cm.avg7 != null ? `7D ${money(cm.avg7, cm.currency)}` : ""}
+                  {cm.avg7 != null && cm.avg30 != null ? " · " : ""}
+                  {cm.avg30 != null ? `30D ${money(cm.avg30, cm.currency)}` : ""}
+                </p>
+              </div>
+              <p className="num text-base font-bold text-foreground">{money(cm.trend ?? cm.avg ?? cm.avg7 ?? 0, cm.currency)}</p>
+            </div>
+          )}
+        </div>
+      )}
+
       <p className="mt-3 text-[11px] text-muted-foreground">
         {dbPoints.length > 0
           ? "Histórico registrado no banco PokePlace a partir de observações diárias e vendas liquidadas."
-          : fromWindows
-            ? "Série montada com as médias públicas reais de 1, 7 e 30 dias da Cardmarket (via TCGdex). Não representa vendas liquidadas no PokePlace."
-            : "Referência visual ancorada no preço de mercado TCGplayer (TCGdex) enquanto o histórico diário acumula no banco."}{" "}
+          : activeMode === "brl"
+            ? `Referência convertida para reais (US$ 1 ≈ ${money(fx.USD, "BRL")} · € 1 ≈ ${money(fx.EUR, "BRL")}) a partir das cotações públicas da TCGdex enquanto o histórico nacional acumula.`
+            : fromWindows
+              ? "Série ancorada nas médias públicas de 1, 7 e 30 dias da Cardmarket (via TCGdex). Não representa vendas liquidadas no PokePlace."
+              : "Curva de referência ancorada no preço de mercado TCGplayer (TCGdex) enquanto o histórico diário acumula no banco."}{" "}
         3 meses grátis; períodos maiores no Collector Pro.
       </p>
     </section>

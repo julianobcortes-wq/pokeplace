@@ -7,6 +7,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { money } from "@/lib/format";
 import { safeNotificationHref } from "@/lib/safe-url";
+import { isSupabaseConfigured } from "@/lib/runtime-config";
 import { processPayout, requestSellerPayout, resolveDispute, reviewReport, setPlatformSetting } from "@/lib/guard.functions";
 
 const f = "w-full rounded-md border border-input bg-background px-3 py-2 text-sm";
@@ -20,7 +21,7 @@ export const DISPUTE_STATUS: Record<string, string> = { open: "Aguardando a loja
 export function NotificationBell({ userId }: { userId: string }) {
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
-  const { data = [] } = useQuery({ queryKey: ["notifications", userId], refetchInterval: 60000, queryFn: async () => (await supabase.from("notifications").select("*").order("created_at", { ascending: false }).limit(20)).data ?? [] });
+  const { data = [] } = useQuery({ queryKey: ["notifications", userId], enabled: isSupabaseConfigured(), refetchInterval: 60000, queryFn: async () => (await supabase.from("notifications").select("*").order("created_at", { ascending: false }).limit(20)).data ?? [] });
   const unread = data.filter((n) => !n.read_at).length;
   const markAll = async () => { const ids = data.filter((n) => !n.read_at).map((n) => n.id); if (ids.length) await supabase.from("notifications").update({ read_at: new Date().toISOString() }).in("id", ids); qc.invalidateQueries({ queryKey: ["notifications"] }); };
   return (
@@ -68,7 +69,7 @@ export function ListingQuestions({ cardId, listings }: { cardId: string; listing
   const qc = useQueryClient();
   const [listing, setListing] = useState("");
   const [q, setQ] = useState("");
-  const { data = [] } = useQuery({ queryKey: ["questions", cardId], queryFn: async () => (await supabase.from("listing_questions").select("id,listing_id,question,answer,answered_at,created_at").eq("card_id", cardId).order("created_at", { ascending: false }).limit(50)).data ?? [] });
+  const { data = [] } = useQuery({ queryKey: ["questions", cardId], enabled: isSupabaseConfigured(), queryFn: async () => (await supabase.from("listing_questions").select("id,listing_id,question,answer,answered_at,created_at").eq("card_id", cardId).order("created_at", { ascending: false }).limit(50)).data ?? [] });
   const ask = async () => { const { error } = await supabase.rpc("ask_question", { _listing_id: listing || listings[0]!.listing_id, _question: q }); if (err(error, "Pergunta enviada à loja")) { setQ(""); qc.invalidateQueries({ queryKey: ["questions", cardId] }); } };
   return (
     <section className="mt-10">

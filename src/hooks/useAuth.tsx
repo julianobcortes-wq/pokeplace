@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { User } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
+import { isSupabaseConfigured } from "@/lib/runtime-config";
 
 export function useAuth() {
   const [user, setUser] = useState<User | null>(null);
@@ -8,6 +9,10 @@ export function useAuth() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (!isSupabaseConfigured()) {
+      setLoading(false);
+      return;
+    }
     const load = async (u: User | null) => {
       setUser(u);
       if (u) {
@@ -16,7 +21,7 @@ export function useAuth() {
       } else setRoles([]);
       setLoading(false);
     };
-    supabase.auth.getUser().then(({ data }) => load(data.user));
+    supabase.auth.getUser().then(({ data }) => load(data.user)).catch(() => setLoading(false));
     const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => { load(s?.user ?? null); });
     return () => sub.subscription.unsubscribe();
   }, []);

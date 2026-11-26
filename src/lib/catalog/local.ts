@@ -29,26 +29,57 @@ export type LocalCard = {
   card_sets: LocalSet;
 };
 
-const sets: LocalSet[] = (seed.sets as Omit<LocalSet, "symbol_url">[]).map((s) => ({
+/** TCGdex logo/symbol URLs omit the file extension in raw API responses and 404 unless .webp/.png is appended. */
+export function normalizeSetLogoUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+  if (/^https:\/\/assets\.tcgdex\.net\/.+\/(logo|symbol)$/i.test(trimmed)) {
+    return `${trimmed}.webp`;
+  }
+  return trimmed;
+}
+
+type RawSeedSet = Omit<LocalSet, "symbol_url"> & { asset_base?: string };
+type RawSeedCardTuple = [setIdx: number, id: string, number: string, name: string];
+
+const rawSets = seed.sets as RawSeedSet[];
+const sets: LocalSet[] = rawSets.map(({ asset_base: _a, ...s }) => ({
   ...s,
+  logo_url: normalizeSetLogoUrl(s.logo_url),
   symbol_url: null,
 }));
 const setById = new Map(sets.map((s) => [s.id, s]));
 
-const cards: LocalCard[] = (
-  seed.cards as { id: string; name: string; number: string; image_small: string | null; image_large: string | null; set_id: string; source: string }[]
-).map((c) => {
-  const set = setById.get(c.set_id);
-  if (!set) throw new Error(`Coleção ausente no catálogo local: ${c.set_id}`);
-  return { ...c, rarity: null, supertype: "Pokémon", subtypes: null, types: null, artist: null, card_sets: set };
+const cards: LocalCard[] = (seed.cards as RawSeedCardTuple[]).map(([setIdx, id, number, name]) => {
+  const rawSet = rawSets[setIdx];
+  const set = sets[setIdx];
+  if (!rawSet || !set) throw new Error(`Coleção ausente no catálogo local: index ${setIdx}`);
+  const base = rawSet.asset_base ? `${rawSet.asset_base}/${number}` : null;
+  return {
+    id,
+    name,
+    number,
+    rarity: null,
+    image_small: base ? `${base}/low.webp` : null,
+    image_large: base ? `${base}/high.webp` : null,
+    set_id: set.id,
+    supertype: "Pokémon",
+    subtypes: null,
+    types: null,
+    artist: null,
+    source: set.source,
+    card_sets: set,
+  };
 });
+const cardById = new Map(cards.map((c) => [c.id, c]));
 
 export function localSets(): LocalSet[] {
   return [...sets].sort((a, b) => (b.release_date ?? "").localeCompare(a.release_date ?? ""));
 }
 
 export function localCard(id: string): LocalCard | null {
-  return cards.find((c) => c.id === id) ?? null;
+  return cardById.get(id) ?? null;
 }
 
 export function localCardsBySet(setId: string): { set: LocalSet | null; cards: LocalCard[] } {
@@ -87,11 +118,12 @@ export function localStats() {
 }
 
 export function localTrending(): LocalCard[] {
+  // Index 2 is the centered, floating focal card in the hero fan (Base Set Charizard).
   const ids = [
+    "swsh7-95",
+    "sv03.5-151",
     "base1-4",
     "sv08.5-161",
-    "sv03.5-151",
-    "swsh7-95",
     "neo1-9",
     "base1-2",
     "sv03.5-183",

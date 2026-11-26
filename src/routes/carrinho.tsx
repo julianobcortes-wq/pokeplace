@@ -7,6 +7,7 @@ import { SellerLine } from "@/components/market";
 import { PageShell } from "@/components/SiteHeader";
 import { useCart } from "@/lib/cart";
 import { useAuth } from "@/hooks/useAuth";
+import { isSupabaseConfigured } from "@/lib/runtime-config";
 import { supabase } from "@/integrations/supabase/client";
 import { getPaymentOptions } from "@/lib/payments/functions";
 import { BRAND, money } from "@/lib/format";
@@ -47,7 +48,7 @@ function CartPage() {
 
   const { data: sellers = [] } = useQuery({
     queryKey: ["cart-sellers", items.map((i) => i.listingId)],
-    enabled: items.length > 0,
+    enabled: items.length > 0 && isSupabaseConfigured(),
     queryFn: async () => {
       const { data, error } = await supabase.rpc("get_listing_sellers", { _ids: items.map((i) => i.listingId) });
       if (error) throw error;
@@ -65,7 +66,7 @@ function CartPage() {
   const sellerIds = [...new Set(sellers.map((s) => s.seller_id).filter(Boolean))] as string[];
   const { data: profiles = [] } = useQuery({
     queryKey: ["ship-profiles", sellerIds],
-    enabled: sellerIds.length > 0,
+    enabled: sellerIds.length > 0 && isSupabaseConfigured(),
     queryFn: async () => (await supabase.from("shipping_profiles").select("*").in("seller_id", sellerIds)).data ?? [],
   });
 

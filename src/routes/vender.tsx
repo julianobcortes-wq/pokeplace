@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { CheckCircle2, ClipboardCheck, ShieldCheck, Store } from "lucide-react";
 import { PageShell } from "@/components/SiteHeader";
 import { useAuth } from "@/hooks/useAuth";
+import { isSupabaseConfigured } from "@/lib/runtime-config";
 import { supabase } from "@/integrations/supabase/client";
 import { BRAND, SELLER_STATUS } from "@/lib/format";
 
@@ -29,7 +30,7 @@ function Sell() {
   const qc = useQueryClient();
   const { data: seller, isLoading } = useQuery({
     queryKey: ["my-seller", user?.id],
-    enabled: !!user,
+    enabled: !!user && isSupabaseConfigured(),
     queryFn: async () => (await supabase.from("sellers").select("*").eq("user_id", user!.id).maybeSingle()).data,
   });
 
@@ -37,7 +38,7 @@ function Sell() {
     <PageShell>
       <section className="grain relative overflow-hidden bg-ink-glow text-ink-foreground">
         <div className="pointer-events-none absolute -right-24 -top-24 h-72 w-72 rounded-full bg-holo opacity-15 blur-3xl" />
-        <div className="relative mx-auto max-w-5xl px-4 py-10 md:py-14">
+        <div className="relative mx-auto max-w-5xl px-4 py-8 md:py-10">
           <p className="num text-[11px] uppercase tracking-[0.2em] text-holo">Parceiros & Colecionadores</p>
           <h1 className="mt-2 text-4xl font-extrabold md:text-5xl">Venda suas cartas no {BRAND.name}</h1>
           <p className="mt-3 max-w-2xl text-sm opacity-75 md:text-base">

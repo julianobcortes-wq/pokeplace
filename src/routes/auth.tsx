@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { PageShell } from "@/components/SiteHeader";
+import { isSupabaseConfigured } from "@/lib/runtime-config";
 import { supabase } from "@/integrations/supabase/client";
 import { BRAND } from "@/lib/format";
 
@@ -34,9 +35,10 @@ function AuthPage() {
 
   useEffect(() => {
     sessionStorage.setItem("auth_next", dest);
+    if (!isSupabaseConfigured()) return;
     supabase.auth.getUser().then(({ data }) => {
       if (data.user) nav({ href: dest });
-    });
+    }).catch(() => undefined);
     const { data: sub } = supabase.auth.onAuthStateChange((e) => {
       if (e === "SIGNED_IN") nav({ href: sessionStorage.getItem("auth_next") || "/" });
     });
@@ -90,7 +92,7 @@ function AuthPage() {
 
   return (
     <PageShell>
-      <main className="mx-auto max-w-md px-4 py-12">
+      <main className="mx-auto max-w-md px-4 py-8 md:py-12">
         <div className="rounded-3xl border border-border bg-card p-7 shadow-float">
           <p className="num text-[11px] uppercase tracking-[0.2em] text-primary">{BRAND.name}</p>
           <h1 className="mt-1 text-3xl font-extrabold">

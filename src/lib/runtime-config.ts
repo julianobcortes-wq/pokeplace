@@ -30,3 +30,26 @@ export function readBrowserPublicConfig(): Partial<PublicRuntimeConfig> {
     ...(key ? { supabasePublishableKey: key } : {}),
   };
 }
+
+/**
+ * Returns true when a real Supabase URL + publishable key are configured in the
+ * current runtime (Vite env, SSR-injected meta tags, or server process.env).
+ * Prevents unconfigured local previews from firing doomed requests to 127.0.0.1:54321.
+ */
+export function isSupabaseConfigured(): boolean {
+  const browserCfg = readBrowserPublicConfig();
+  const serverEnv = typeof process !== "undefined" ? process.env : undefined;
+  const url = (
+    (import.meta.env?.["VITE_SUPABASE_URL"] as string | undefined) ||
+    browserCfg.supabaseUrl ||
+    serverEnv?.["SUPABASE_URL"] ||
+    ""
+  ).trim();
+  const key = (
+    (import.meta.env?.["VITE_SUPABASE_PUBLISHABLE_KEY"] as string | undefined) ||
+    browserCfg.supabasePublishableKey ||
+    serverEnv?.["SUPABASE_PUBLISHABLE_KEY"] ||
+    ""
+  ).trim();
+  return Boolean(url && key);
+}

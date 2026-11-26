@@ -3,14 +3,16 @@ import { useMemo, useState } from "react";
 import { ArrowLeft, Search } from "lucide-react";
 import { PageShell } from "@/components/SiteHeader";
 import { CardGrid } from "@/components/CardGrid";
-import { getSet } from "@/lib/catalog.functions";
+import { SetLogo } from "@/components/market";
+import { getSet, getTrends } from "@/lib/catalog.functions";
 import { BRAND } from "@/lib/format";
 
 export const Route = createFileRoute("/colecoes/$setId")({
   loader: async ({ params }) => {
     const r = await getSet({ data: { id: params.setId } });
     if (!r.set) throw notFound();
-    return r;
+    const initialTrends = await getTrends({ data: { ids: r.cards.slice(0, 30).map((c) => c.id) } });
+    return { ...r, initialTrends };
   },
   head: ({ loaderData }) => ({
     meta: [
@@ -26,7 +28,7 @@ export const Route = createFileRoute("/colecoes/$setId")({
 });
 
 function SetPage() {
-  const { set, cards } = Route.useLoaderData();
+  const { set, cards, initialTrends } = Route.useLoaderData();
   const [rarity, setRarity] = useState("");
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<"number" | "name-asc" | "name-desc">("number");
@@ -55,7 +57,7 @@ function SetPage() {
             <div className="flex flex-wrap items-center gap-6">
               {set?.logo_url && (
                 <div className="rounded-2xl border border-ink-foreground/10 bg-ink-foreground/5 p-4 backdrop-blur">
-                  <img src={set.logo_url} alt={set.name} className="h-14 w-auto object-contain md:h-16" />
+                  <SetLogo src={set.logo_url} name={set.name} className="h-14 max-w-[160px] md:h-16" />
                 </div>
               )}
               <div>
@@ -126,7 +128,7 @@ function SetPage() {
               Nenhuma carta encontrada com esses filtros.
             </div>
           ) : (
-            <CardGrid cards={list} setName={set?.name} />
+            <CardGrid cards={list} setName={set?.name} initialTrends={initialTrends} />
           )}
         </div>
       </main>

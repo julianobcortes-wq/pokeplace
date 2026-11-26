@@ -77,22 +77,21 @@ export function SiteHeader() {
   const { items } = useCart();
   const { user, isAdmin, roles } = useAuth();
   const count = items.reduce((s, i) => s + i.qty, 0);
-  const nav = "rounded-full px-3 py-1.5 opacity-75 transition hover:bg-ink-foreground/10 hover:opacity-100 [&.active]:bg-ink-foreground/10 [&.active]:opacity-100";
+  const nav = "whitespace-nowrap rounded-full px-3 py-1.5 opacity-75 transition hover:bg-ink-foreground/10 hover:opacity-100 [&.active]:bg-ink-foreground/10 [&.active]:opacity-100";
   return (
     <header className="sticky top-0 z-30 bg-ink text-ink-foreground">
-      <div className="mx-auto flex max-w-7xl items-center gap-6 px-4 py-2">
-        <Logo imgClass="h-12" />
+      <div className="mx-auto flex max-w-7xl items-center gap-4 px-4 py-2 lg:gap-6">
+        <Logo imgClass="h-11 lg:h-12" />
         <nav className="hidden items-center gap-1 text-sm lg:flex">
           <Link to="/" className={nav} activeOptions={{ exact: true }}>Marketplace</Link>
           <Link to="/colecoes" className={nav}>Coleções</Link>
-          <Link to="/canais" search={{ seller: "loja-local" }} className={nav}>Canais</Link>
           <Link to="/vender" className={nav}>Vender</Link>
           <Link to="/colecao" className={nav}>Meu acervo</Link>
           {roles.includes("seller") && <Link to="/minha-loja" className={nav}>Minha loja</Link>}
           {isAdmin && <Link to="/admin" className={nav}>Admin</Link>}
         </nav>
-        <div className="ml-auto hidden w-72 md:block"><SearchBox /></div>
-        <div className="flex items-center gap-1 text-sm">
+        <div className="ml-auto hidden w-64 md:block lg:w-72"><SearchBox /></div>
+        <div className="flex shrink-0 items-center gap-1 text-sm">
           <ThemeToggle />
           {user ? (
             <>
@@ -101,7 +100,7 @@ export function SiteHeader() {
               <Link to="/conta" className={nav}>Conta</Link>
               <Button variant="ghost" onClick={() => supabase.auth.signOut()} className={nav}>Sair</Button>
             </>
-          ) : <Link to="/auth" className="rounded-full bg-ink-foreground px-4 py-1.5 font-medium text-ink">Entrar</Link>}
+          ) : <Link to="/auth" className="whitespace-nowrap rounded-full bg-ink-foreground px-4 py-1.5 font-medium text-ink transition hover:opacity-90">Entrar</Link>}
           <Link to="/carrinho" aria-label="Carrinho" className="relative rounded-full p-2 hover:bg-ink-foreground/10">
             <ShoppingBag className="h-5 w-5" />
             {count > 0 && <span className="num absolute -right-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">{count}</span>}
@@ -123,7 +122,7 @@ export function PageShell({ children }: { children: React.ReactNode }) {
       <footer className="grain mt-20 bg-ink-glow text-ink-foreground">
         <div className="mx-auto flex max-w-7xl flex-wrap items-start justify-between gap-6 px-4 py-10 text-sm">
           <div><Logo imgClass="h-12" /><p className="mt-2 max-w-sm opacity-60">{BRAND.tagline}.</p></div>
-          <nav aria-label="Ajuda" className="flex flex-wrap gap-4"><Link to="/compra-garantida">Compra Garantida</Link><Link to="/seguranca">Segurança</Link><Link to="/termos">Termos</Link><Link to="/privacidade">Privacidade</Link><Link to="/regras-vendedor">Regras para lojas</Link><Link to="/atendimento">Atendimento</Link><Link to="/colecao">Minha coleção</Link><Link to="/planos">Planos</Link><Link to="/vender">Vender</Link></nav>
+          <nav aria-label="Ajuda" className="flex flex-wrap gap-4"><Link to="/compra-garantida">Compra Garantida</Link><Link to="/seguranca">Segurança</Link><Link to="/termos">Termos</Link><Link to="/privacidade">Privacidade</Link><Link to="/regras-vendedor">Regras para lojas</Link><Link to="/canais" search={{ seller: "loja-local" }}>Canais</Link><Link to="/atendimento">Atendimento</Link><Link to="/colecao">Minha coleção</Link><Link to="/planos">Planos</Link><Link to="/vender">Vender</Link></nav>
           <p className="max-w-md text-xs opacity-50">Catálogo baseado em dados abertos (PokemonTCG/pokemon-tcg-data). Pokémon e nomes relacionados são marcas de seus respectivos donos.</p>
         </div>
       </footer>

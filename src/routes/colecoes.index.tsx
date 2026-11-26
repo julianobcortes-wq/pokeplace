@@ -2,6 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { Search } from "lucide-react";
 import { PageShell } from "@/components/SiteHeader";
+import { SetLogo } from "@/components/market";
 import { listSets } from "@/lib/catalog.functions";
 import type { LocalSet } from "@/lib/catalog/local";
 import { BRAND } from "@/lib/format";
@@ -50,13 +51,13 @@ function Sets() {
     <PageShell>
       <section className="grain relative overflow-hidden bg-ink-glow text-ink-foreground">
         <div className="pointer-events-none absolute -right-28 -top-28 h-80 w-80 rounded-full bg-holo opacity-15 blur-3xl" />
-        <div className="relative mx-auto max-w-7xl px-4 py-10 md:py-14">
+        <div className="relative mx-auto max-w-7xl px-4 py-6 md:py-8">
           <p className="num text-[11px] uppercase tracking-[0.2em] text-holo">Catálogo oficial · {sets.length} expansões</p>
-          <h1 className="mt-2 text-4xl font-extrabold md:text-5xl">Coleções Pokémon TCG</h1>
+          <h1 className="mt-1.5 text-3xl font-extrabold md:text-5xl">Coleções Pokémon TCG</h1>
           <p className="mt-2 max-w-2xl text-sm opacity-75 md:text-base">
             Navegue por era e expansão, acompanhe cotações públicas e encontre a impressão exata da carta que procura.
           </p>
-          <div className="mt-6 flex flex-wrap items-center gap-3">
+          <div className="mt-5 flex flex-wrap items-center gap-3">
             <div className="flex w-full max-w-md items-center gap-2 rounded-full border border-ink-foreground/15 bg-ink-foreground/10 px-4 py-2.5 text-sm backdrop-blur">
               <Search className="h-4 w-4 opacity-70" />
               <input
@@ -94,16 +95,16 @@ function Sets() {
         </div>
       </section>
 
-      <main className="mx-auto max-w-7xl px-4 py-8">
+      <main className="mx-auto max-w-7xl px-4 py-7">
         {filtered.length === 0 ? (
           <div className="dots rounded-3xl border border-dashed border-border p-10 text-center text-muted-foreground">
             Nenhuma coleção encontrada para “{q}”.
           </div>
         ) : (
           Object.entries(bySeries).map(([ser, list]) => (
-            <section key={ser} className="mt-8 first:mt-0">
+            <section key={ser} className="mt-7 first:mt-0">
               <div className="flex items-baseline justify-between gap-2">
-                <h2 className="text-2xl font-extrabold">{ser}</h2>
+                <h2 className="text-xl font-extrabold md:text-2xl">{ser}</h2>
                 <span className="num text-xs text-muted-foreground">
                   {list.length} {list.length === 1 ? "expansão" : "expansões"}
                 </span>
@@ -114,16 +115,12 @@ function Sets() {
                     key={s.id}
                     to="/colecoes/$setId"
                     params={{ setId: s.id }}
-                    className="group flex flex-col items-center justify-between rounded-2xl border border-border bg-card p-5 text-center shadow-slab transition hover:-translate-y-0.5 hover:border-foreground/25"
+                    className="group flex flex-col items-center justify-between rounded-2xl border border-border bg-card p-4 text-center shadow-slab transition hover:-translate-y-0.5 hover:border-foreground/25"
                   >
-                    <div className="flex h-16 items-center justify-center">
-                      {s.logo_url ? (
-                        <img src={s.logo_url} alt={s.name} loading="lazy" className="max-h-14 w-auto object-contain transition group-hover:scale-105" />
-                      ) : (
-                        <span className="font-display text-lg font-bold">{s.name}</span>
-                      )}
+                    <div className="flex h-14 items-center justify-center transition group-hover:scale-105">
+                      <SetLogo src={s.logo_url} name={s.name} className="max-h-12 max-w-[140px]" />
                     </div>
-                    <div className="mt-3">
+                    <div className="mt-2.5">
                       <p className="text-sm font-semibold">{s.name}</p>
                       <p className="num mt-0.5 text-xs text-muted-foreground">
                         {s.release_date?.slice(0, 4) ?? "—"} · {s.total ?? "—"} cartas

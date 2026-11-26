@@ -7,15 +7,19 @@ import { Change, HoloCard, Sparkline } from "./market";
 
 type C = { id: string; name: string; number: string; rarity: string | null; image_small: string | null; card_sets?: { name: string } | null };
 
-export function useTrends(ids: string[]) {
-  return (
-    useQuery({
-      queryKey: ["trends", ids.join(",")],
-      queryFn: () => getTrends({ data: { ids } }),
-      enabled: ids.length > 0,
-      staleTime: 5 * 60_000,
-    }).data ?? {}
-  );
+export function useTrendsQuery(ids: string[], initialData?: Record<string, TrendSummary>) {
+  const hasInitial = Boolean(initialData && Object.keys(initialData).length > 0);
+  return useQuery({
+    queryKey: ["trends", ids.join(",")],
+    queryFn: () => getTrends({ data: { ids } }),
+    enabled: ids.length > 0,
+    staleTime: 5 * 60_000,
+    ...(hasInitial ? { initialData } : {}),
+  });
+}
+
+export function useTrends(ids: string[], initialData?: Record<string, TrendSummary>) {
+  return useTrendsQuery(ids, initialData).data ?? initialData ?? {};
 }
 
 /** "Slab" tile: card in a graded-case frame with label strip, holo tilt and price trend. */
@@ -27,6 +31,7 @@ export function Slab({
   right,
   trend,
   priceLabel,
+  loading = false,
 }: {
   to: { cardId: string };
   image: string | null;
@@ -35,6 +40,7 @@ export function Slab({
   right?: React.ReactNode;
   trend?: TrendSummary | undefined;
   priceLabel?: React.ReactNode;
+  loading?: boolean;
 }) {
   return (
     <Link
@@ -62,8 +68,16 @@ export function Slab({
               </div>
               <Change pct={trend.change} />
             </div>
+          ) : loading ? (
+            <div className="space-y-1.5 py-0.5">
+              <div className="h-3 w-14 animate-pulse rounded bg-muted" />
+              <div className="h-4 w-20 animate-pulse rounded bg-muted" />
+            </div>
           ) : (
-            <p className="text-xs text-muted-foreground">Consultando ref…</p>
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span>Ver detalhes</span>
+              <span className="transition group-hover:translate-x-0.5 group-hover:text-primary">→</span>
+            </div>
           ))}
         {trend && <Sparkline points={trend.points} className="mt-1 h-7 w-full" />}
       </div>
@@ -71,17 +85,35 @@ export function Slab({
   );
 }
 
-export function CardGrid({ cards, setName }: { cards: C[]; setName?: string | undefined }) {
-  const trends = useTrends(cards.slice(0, 40).map((c) => c.id));
+export function CardGrid({
+  cards,
+  setName,
+  initialTrends,
+  columns = "default",
+}: {
+  cards: C[];
+  setName?: string | undefined;
+  initialTrends?: Record<string, TrendSummary> | undefined;
+  columns?: "default" | "sidebar";
+}) {
+  const trendIds = cards.slice(0, 40).map((c) => c.id);
+  const trendsQuery = useTrendsQuery(trendIds, initialTrends);
+  const trends = trendsQuery.data ?? initialTrends ?? {};
+  const isLoading = trendsQuery.isPending && !Object.keys(trends).length;
+  const gridCls =
+    columns === "sidebar"
+      ? "grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4 xl:grid-cols-5"
+      : "grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 md:grid-cols-4 lg:grid-cols-6";
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 md:grid-cols-4 lg:grid-cols-6">
-      {cards.map((c) => (
+    <div className={gridCls}>
+      {cards.map((c, idx) => (
         <Slab
           key={c.id}
           to={{ cardId: c.id }}
           image={c.image_small}
           title={c.name}
           trend={trends[c.id]}
+          loading={isLoading && idx < 40}
           sub={`${setName ?? c.card_sets?.name ?? ""} · ${c.rarity ?? "Pokémon TCG"}`}
           right={<span className="num shrink-0 text-[11px] opacity-80">#{c.number}</span>}
         />
