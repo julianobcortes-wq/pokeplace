@@ -54,7 +54,7 @@ describe("parseBulkListingCsv", () => {
   });
 
   it("auto-detects semicolon separators and BOM from spreadsheet exports", () => {
-    const csv = `\uFEFF${HEADER.replaceAll(",", ";")}\nsv3pt5-199;hp;pt;holo;"8,90";3;sim;PSA;9;\"capa, leve\"\n`;
+    const csv = `\uFEFF${HEADER.replaceAll(",", ";")}\nsv3pt5-199;hp;pt;holo;"8,90";3;sim;PSA;9;"capa, leve"\n`;
     const result = parseBulkListingCsv(csv);
     expect(result.issues).toEqual([]);
     expect(result.rows[0]).toMatchObject({
