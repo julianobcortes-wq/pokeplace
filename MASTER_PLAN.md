@@ -82,4 +82,4 @@ Plano mestre vivo para fechamento completo e comercial do marketplace **PokePlac
 4. **Cron agendado na Cloudflare**: Configurar um Cron Trigger ou GitHub Actions agendado chamando `/api/cron/sync-prices` e `/api/cron/orders-maintenance` com header `x-cron-secret`.
 
 ## Próxima Tarefa Imediata
-Nenhuma pendência técnica autônoma restante. Aguardando exclusivamente ações externas do proprietário (merge do PR, aplicação de `scripts/sql/all-migrations.sql` no Supabase, conexão Cloudflare Workers + variáveis de produção e credenciais Mercado Pago / Resend).
+Nenhuma pendência técnica autônoma restante (PR #9 validado no CI e mesclado em `main`). Aguardando exclusivamente ações externas do proprietário: aplicação de `scripts/sql/all-migrations.sql` no Supabase, conexão Cloudflare Workers + segredos de produção e configuração do webhook Mercado Pago + crons agendados.
