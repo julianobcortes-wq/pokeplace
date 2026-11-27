@@ -78,6 +78,10 @@ export function localSets(): LocalSet[] {
   return [...sets].sort((a, b) => (b.release_date ?? "").localeCompare(a.release_date ?? ""));
 }
 
+export function localAllCards(): LocalCard[] {
+  return cards;
+}
+
 export function localCard(id: string): LocalCard | null {
   return cardById.get(id) ?? null;
 }

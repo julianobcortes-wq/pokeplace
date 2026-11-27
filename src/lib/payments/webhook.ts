@@ -61,24 +61,11 @@ export async function handleMercadoPagoWebhook(request: Request): Promise<Respon
       _external_id: String(payment.id),
     });
     if (error) {
-      const amount = payment.transaction_amount ?? 0;
-      await supabaseAdmin.from("orders").update({ status: "paid", expires_at: null }).eq("id", orderId).eq("status", "awaiting_payment");
-      const { data: existing } = await supabaseAdmin.from("payments").select("id").eq("order_id", orderId).limit(1);
-      if (existing?.length) {
-        await supabaseAdmin
-          .from("payments")
-          .update({ status: "succeeded", provider: "mercadopago", environment: "live" })
-          .eq("order_id", orderId);
-      } else if (amount > 0) {
-        await supabaseAdmin.from("payments").insert({
-          order_id: orderId,
-          provider: "mercadopago",
-          environment: "live",
-          status: "succeeded",
-          amount,
-          currency: "BRL",
-        });
-      }
+      console.error("[mp-webhook] confirm_live_payment failed:", error.message);
+      return new Response(JSON.stringify({ error: "payment confirmation failed" }), {
+        status: 500,
+        headers: { "content-type": "application/json" },
+      });
     }
 
     // Non-blocking buyer confirmation email (uses Resend when RESEND_API_KEY is set, otherwise logs stub).
