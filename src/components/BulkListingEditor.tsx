@@ -57,7 +57,7 @@ export function BulkListingEditor({ sellerId, selectedIds, approved, onClear, on
       toast.error("Informe um valor numérico");
       return;
     }
-    const rule: BulkPriceRule = mode === "percent" ? { mode, percent: n } : { mode, price: n };
+    const rule: BulkPriceRule = mode === "set" ? { mode, price: n } : { mode, percent: n };
     void run({ kind: "price", rule });
   };
 
@@ -86,13 +86,20 @@ export function BulkListingEditor({ sellerId, selectedIds, approved, onClear, on
             onChange={(e) => setMode(e.target.value as BulkPriceRule["mode"])}
           >
             <option value="percent">ajustar em %</option>
+            <option value="reference_percent">% sobre ref. BRL</option>
             <option value="set">definir R$</option>
           </select>
         </label>
         <input
-          aria-label={mode === "percent" ? "Percentual de ajuste" : "Preço fixo"}
+          aria-label={
+            mode === "set"
+              ? "Preço fixo"
+              : mode === "reference_percent"
+                ? "Percentual sobre referência BRL"
+                : "Percentual de ajuste"
+          }
           inputMode="decimal"
-          placeholder={mode === "percent" ? "-10 ou 5" : "12,50"}
+          placeholder={mode === "set" ? "12,50" : "-10 ou 5"}
           value={value}
           onChange={(e) => setValue(e.target.value)}
           className={`num w-24 ${field}`}

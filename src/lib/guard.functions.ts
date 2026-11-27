@@ -166,6 +166,7 @@ const bulkEditAction = z.discriminatedUnion("kind", [
     rule: z.discriminatedUnion("mode", [
       z.object({ mode: z.literal("set"), price: z.number().finite() }),
       z.object({ mode: z.literal("percent"), percent: z.number().finite() }),
+      z.object({ mode: z.literal("reference_percent"), percent: z.number().finite() }),
     ]),
   }),
   z.object({ kind: z.literal("quantity"), quantity: z.number().int().min(0).max(9999) }),
@@ -198,14 +199,54 @@ export const bulkUpdateOwnListings = createServerFn({ method: "POST" })
     if (sellerError || !seller) throw new Error("Acesso negado");
     const { data: rows, error: readError } = await ctx.supabase
       .from("listings")
-      .select("id,price,quantity,status")
+      .select("id,card_id,price,quantity,status")
       .eq("seller_id", seller.id)
       .in("id", data.listingIds);
     if (readError) throw new Error("Não foi possível ler os anúncios");
+    let referencePrices: Record<string, number> | undefined;
+    if (data.action.kind === "price" && data.action.rule.mode === "reference_percent") {
+      referencePrices = {};
+      const cardIds = Array.from(
+        new Set(
+          ((rows ?? []) as { card_id?: string | null }[])
+            .map((r) => r.card_id)
+            .filter((id): id is string => typeof id === "string" && id.length > 0),
+        ),
+      );
+      if (cardIds.length > 0) {
+        const rpcRes = await (ctx.supabase as unknown as {
+          rpc: (fn: string, args: Record<string, unknown>) => Promise<{ data: { card_id: string; reference_brl: number }[] | null; error: unknown }>;
+        }).rpc("get_card_reference_prices", { _card_ids: cardIds });
+        if (!rpcRes.error && Array.isArray(rpcRes.data)) {
+          for (const row of rpcRes.data) {
+            if (row.card_id && Number(row.reference_brl) > 0) {
+              referencePrices[row.card_id] = Number(row.reference_brl);
+            }
+          }
+        }
+        // Fallback to live price_observations BRL/USD/EUR if RPC not yet applied
+        const missingCards = cardIds.filter((id) => !referencePrices?.[id]);
+        if (missingCards.length > 0) {
+          const { convertToBrl, getFxRates } = await import("@/lib/pricing/fx");
+          const fx = await getFxRates();
+          const { data: obs } = await ctx.supabase
+            .from("price_observations")
+            .select("card_id,amount,currency,observed_at")
+            .in("card_id", missingCards)
+            .order("observed_at", { ascending: false });
+          for (const o of (obs ?? []) as { card_id: string; amount: number; currency: string }[]) {
+            if (!referencePrices[o.card_id] && Number(o.amount) > 0) {
+              referencePrices[o.card_id] = convertToBrl(Number(o.amount), o.currency || "BRL", fx);
+            }
+          }
+        }
+      }
+    }
     const plan = planBulkEdit(
       (rows ?? []) as BulkEditListing[],
       data.action,
       seller.status === "approved",
+      referencePrices,
     );
     const failed: { id: string; reason: string }[] = [];
     let updated = 0;

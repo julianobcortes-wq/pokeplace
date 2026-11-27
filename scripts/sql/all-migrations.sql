@@ -1781,3 +1781,57 @@ $$;
 REVOKE ALL ON FUNCTION public.list_ranked_buyers(int) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.list_ranked_buyers(int) TO anon, authenticated, service_role;
 
+-- =====================================================================
+-- 0014_reference_prices_rpc.sql
+-- Latest BRL market reference prices per card for bulk repricing & pricing intel
+-- =====================================================================
+CREATE OR REPLACE FUNCTION public.get_card_reference_prices(_card_ids text[])
+RETURNS TABLE(card_id text, reference_brl numeric, source text, observed_at timestamptz)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  WITH latest_obs AS (
+    SELECT DISTINCT ON (po.card_id)
+      po.card_id,
+      CASE
+        WHEN upper(coalesce(po.currency, 'BRL')) = 'BRL' THEN po.amount
+        WHEN upper(po.currency) = 'USD' THEN round(po.amount * 5.80, 2)
+        WHEN upper(po.currency) = 'EUR' THEN round(po.amount * 6.25, 2)
+        ELSE po.amount
+      END AS reference_brl,
+      po.source,
+      po.observed_at
+    FROM public.price_observations po
+    WHERE po.card_id = ANY(_card_ids)
+      AND po.amount > 0
+    ORDER BY po.card_id, po.observed_at DESC
+  ),
+  active_avg AS (
+    SELECT
+      l.card_id,
+      round(avg(l.price), 2) AS reference_brl,
+      'marketplace_active'::text AS source,
+      max(l.updated_at) AS observed_at
+    FROM public.listings l
+    WHERE l.card_id = ANY(_card_ids)
+      AND l.status = 'active'
+      AND l.quantity > 0
+      AND l.price > 0
+    GROUP BY l.card_id
+  )
+  SELECT
+    c.id AS card_id,
+    coalesce(lo.reference_brl, aa.reference_brl) AS reference_brl,
+    coalesce(lo.source, aa.source, 'none') AS source,
+    coalesce(lo.observed_at, aa.observed_at) AS observed_at
+  FROM unnest(_card_ids) AS c(id)
+  LEFT JOIN latest_obs lo ON lo.card_id = c.id
+  LEFT JOIN active_avg aa ON aa.card_id = c.id
+  WHERE coalesce(lo.reference_brl, aa.reference_brl) IS NOT NULL;
+$$;
+REVOKE ALL ON FUNCTION public.get_card_reference_prices(text[]) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.get_card_reference_prices(text[]) TO authenticated, service_role;
+
+

@@ -9,6 +9,7 @@ import { PageShell } from "@/components/SiteHeader";
 import { DemoBadge } from "@/components/CardGrid";
 import { Change, HoloCard, SellerLine } from "@/components/market";
 import { CollectionActions } from "@/components/CollectionActions";
+import { ConditionGuide } from "@/components/ConditionGuide";
 import { ListingPhotos } from "@/components/ListingPhotos";
 import { Button } from "@/components/ui/button";
 import { getCard } from "@/lib/catalog.functions";
@@ -237,7 +238,8 @@ function CardPage() {
                 {shown.length} {shown.length === 1 ? "loja vendendo" : "lojas vendendo"}
               </h2>
             </div>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <ConditionGuide />
               <select
                 value={cond}
                 onChange={(e) => setCond(e.target.value)}

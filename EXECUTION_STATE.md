@@ -1,12 +1,12 @@
 # Estado de Execução Autônoma — PokePlace
 
-- **Timestamp (UTC)**: 2026-11-27T20:17:00Z
-- **Branch atual**: `cursor/phase0-cloudflare-hardening-3347`
-- **Fase atual**: Fase 1 — Funcionalidades dos Vendedores (precificação por referência BRL, guia de condições, grading validado, fotos frente/verso por unidade)
-- **Último marco concluído**: Fase 0 completa (regra permanente, `MASTER_PLAN.md`, `EXECUTION_STATE.md`, `docs/CLOUDFLARE_DEPLOY.md`, `src/lib/rate-limit.ts`, segurança HTTP + Cloudflare `env` hydration no `src/server.ts`, fix `limit: 10` em `admin.tsx`, 92/92 testes verdes).
+- **Timestamp (UTC)**: 2026-11-27T20:20:00Z
+- **Branch atual**: `cursor/complete-marketplace-3347`
+- **Fase atual**: Fase 2 — Funcionalidades dos Compradores e Conversão (Propostas/Ofertas, Lista de Desejos com Preço-Alvo, Cupons e Promoções por Volume)
+- **Último marco concluído**: Fase 1 concluída (`grading.ts`, `ConditionGuide.tsx`, `reference_percent` em `bulk-edit.ts` + `guard.functions.ts` + `BulkListingEditor.tsx`, `0014_reference_prices_rpc`, galeria frente/verso em `ListingPhotos.tsx` e `minha-loja.tsx`, 96/96 testes verdes).
 - **Próximo passo exato**:
-  1. Criar `src/lib/marketplace/grading.ts` (validação PSA/BGS/CGC/TAG + guia visual detalhado de condições M/NM/SP/MP/HP/D + rótulos de fotos frente/verso/detalhe).
-  2. Estender `src/lib/marketplace/bulk-edit.ts`, `src/lib/guard.functions.ts`, `src/components/BulkListingEditor.tsx` e `scripts/sql/all-migrations.sql` (`0014`) com reprecificação por % sobre o preço de referência BRL (`reference_percent` + RPC `get_card_reference_prices`).
-  3. Criar `src/components/ConditionGuide.tsx`, atualizar `ListingPhotos.tsx` e `NewListing` em `minha-loja.tsx` com guia visual de condições, validação de grading e galeria frente/verso.
-  4. Escrever testes unitários completos e validar.
-- **Testes mais recentes**: 13 suítes / 92 testes passando, `tsc --noEmit` limpo.
+  1. SQL `0015_offers_coupons_promotions.sql` em `scripts/sql/all-migrations.sql` (`listing_offers`, `store_coupons`, `store_volume_discounts`, RPCs `submit_listing_offer`, `respond_listing_offer`, `cancel_listing_offer`, `expire_stale_offers`, `validate_store_coupon`, `get_wishlist_matches`).
+  2. Módulos puros `src/lib/marketplace/offers.ts` e `src/lib/marketplace/promotions.ts`.
+  3. Componentes UI (`src/components/OfferModal.tsx`, `src/components/SellerPromotions.tsx`, `src/components/OffersInbox.tsx`) integrados em `carta.$cardId.tsx`, `minha-loja.tsx`, `pedidos.index.tsx` e `carrinho.tsx`.
+  4. Testes completos de propostas, cupons e descontos por volume.
+- **Testes mais recentes**: 14 suítes / 96 testes passando, `tsc --noEmit` limpo.

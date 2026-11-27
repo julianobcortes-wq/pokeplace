@@ -1,4 +1,5 @@
 import { CONDITIONS, FINISHES, LANGUAGES } from "@/lib/format";
+import { validateGrading } from "@/lib/marketplace/grading";
 
 export const BULK_MAX_ROWS = 500;
 export const BULK_MAX_PRICE = 100_000;
@@ -179,8 +180,10 @@ export function parseBulkListingCsv(text: string): BulkListingParseResult {
       add("quantity", `Quantidade deve ser entre 1 e ${BULK_MAX_QUANTITY}.`);
     }
     if (graded === null) add("graded", "Use sim ou não em graded.");
-    if (graded && (!gradeCompany || !grade))
-      add("grade", "Carta graduada exige grade_company e grade.");
+    if (graded) {
+      const gradingRes = validateGrading(true, gradeCompany, grade);
+      if (!gradingRes.ok) add("grade", gradingRes.error);
+    }
     if (!graded && (gradeCompany || grade))
       add("grade", "grade_company e grade só podem ser usados com graded = sim.");
     if (notes && notes.length > BULK_NOTES_MAX)

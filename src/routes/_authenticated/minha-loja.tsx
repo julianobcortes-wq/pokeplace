@@ -11,11 +11,13 @@ import { SellerTrustPanel } from "@/components/market";
 import { BuyerReviewForm, StoreProfileEditor, StoreReviews } from "@/components/seller-tools";
 import { BulkListingUpload } from "@/components/BulkListingUpload";
 import { BulkListingEditor } from "@/components/BulkListingEditor";
+import { ConditionGuide } from "@/components/ConditionGuide";
 import { supabase } from "@/integrations/supabase/client";
 import { searchCards } from "@/lib/catalog.functions";
 import type { Database } from "@/integrations/supabase/types";
 import { updateOwnListing } from "@/lib/guard.functions";
 import { BRAND, CONDITIONS, FINISHES, LANGUAGES, SELLER_STATUS, money } from "@/lib/format";
+import { photoSlotLabel, validateGrading } from "@/lib/marketplace/grading";
 import { shippingSlaStatus } from "@/lib/marketplace/rules";
 
 export const Route = createFileRoute("/_authenticated/minha-loja")({
@@ -376,6 +378,11 @@ function NewListing({ sellerId, onDone }: { sellerId: string; onDone: () => void
       toast.error("Informe o preço");
       return;
     }
+    const grading = validateGrading(f.graded, f.grade_company, f.grade);
+    if (!grading.ok) {
+      toast.error(grading.error);
+      return;
+    }
     setBusy(true);
     const { error } = await supabase.from("listings").insert({
       seller_id: sellerId,
@@ -384,8 +391,8 @@ function NewListing({ sellerId, onDone }: { sellerId: string; onDone: () => void
       language: f.language,
       finish: f.finish,
       graded: f.graded,
-      grade_company: f.graded ? f.grade_company : null,
-      grade: f.graded ? f.grade : null,
+      grade_company: grading.company,
+      grade: grading.grade,
       price: Number(f.price.replace(",", ".")),
       quantity: parseInt(f.quantity, 10),
       notes: f.notes || null,
@@ -441,7 +448,10 @@ function NewListing({ sellerId, onDone }: { sellerId: string; onDone: () => void
               </Button>
             </p>
             <label className="text-sm">
-              Condição
+              <span className="flex items-center justify-between gap-2">
+                Condição
+                <ConditionGuide compact label="Guia visual" />
+              </span>
               <select className={i} value={f.condition} onChange={(e) => setF({ ...f, condition: e.target.value })}>
                 {Object.entries(CONDITIONS).map(([k, v]) => (
                   <option key={k} value={k}>
@@ -503,19 +513,33 @@ function NewListing({ sellerId, onDone }: { sellerId: string; onDone: () => void
               Observações
               <input className={i} value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} />
             </label>
-            <div className="flex flex-wrap gap-3 md:col-span-3">
-              {photos.map((path) => (
-                <MediaUpload
-                  key={path}
-                  sellerId={sellerId}
-                  value={path}
-                  onChange={(next) => setPhotos(photos.map((p) => (p === path ? next : p)))}
-                  label="Trocar foto"
-                />
-              ))}
-              {photos.length < 4 && (
-                <MediaUpload sellerId={sellerId} onChange={(path) => setPhotos([...photos, path])} label="Adicionar foto real" />
-              )}
+            <div className="space-y-1.5 md:col-span-3">
+              <p className="text-xs font-medium text-muted-foreground">
+                Fotos reais da unidade (recomendado: frente e verso sob boa luz)
+              </p>
+              <div className="flex flex-wrap gap-3">
+                {photos.map((path, idx) => (
+                  <div key={`${path}-${idx}`} className="space-y-1">
+                    <p className="text-[11px] font-semibold text-muted-foreground">{photoSlotLabel(idx)}</p>
+                    <MediaUpload
+                      sellerId={sellerId}
+                      value={path}
+                      onChange={(next) => setPhotos(photos.map((p, i) => (i === idx ? next : p)))}
+                      label={`Trocar ${photoSlotLabel(idx).toLowerCase()}`}
+                    />
+                  </div>
+                ))}
+                {photos.length < 4 && (
+                  <div className="space-y-1">
+                    <p className="text-[11px] font-semibold text-muted-foreground">{photoSlotLabel(photos.length)}</p>
+                    <MediaUpload
+                      sellerId={sellerId}
+                      onChange={(path) => setPhotos([...photos, path])}
+                      label={`Adicionar ${photoSlotLabel(photos.length).toLowerCase()}`}
+                    />
+                  </div>
+                )}
+              </div>
             </div>
             <Button disabled={busy} className="rounded-full md:col-span-3">
               {busy ? "Publicando…" : "Publicar anúncio"}

@@ -29,9 +29,9 @@ Plano mestre vivo para fechamento completo e comercial do marketplace **PokePlac
 - [x] Curadoria de vendedores, perfil de loja e anúncios unitários
 - [x] Upload em massa via CSV (`src/lib/marketplace/bulk-listing.ts`, `src/components/BulkListingUpload.tsx`)
 - [x] Edição em lote de preço/estoque/status (`src/lib/marketplace/bulk-edit.ts`, `src/components/BulkListingEditor.tsx`)
-- [ ] Edição em lote por % sobre preço de referência BRL (`reference_percent` + RPC `get_card_reference_prices`)
-- [ ] Guia visual de condições (M, NM, SP, MP, HP, D) + validação de empresas/notas de grading (PSA, BGS, CGC, TAG)
-- [ ] Galeria de fotos reais por unidade com rótulos frente/verso/detalhes (`NewListing` + `ListingPhotos`)
+- [x] Edição em lote por % sobre preço de referência BRL (`reference_percent` + RPC `get_card_reference_prices` em `0014`)
+- [x] Guia visual de condições (M, NM, SP, MP, HP, D) + validação de empresas/notas de grading (PSA, BGS, CGC, TAG) no cadastro unitário e CSV (`src/lib/marketplace/grading.ts`, `src/components/ConditionGuide.tsx`)
+- [x] Galeria de fotos reais por unidade com rótulos frente/verso/detalhes e navegação lightbox (`NewListing` + `ListingPhotos`)
 
 ### Fase 2 — Funcionalidades dos Compradores e Conversão
 - [ ] Sistema de propostas ("Fazer oferta"): envio, contra-oferta, aceite/recusa, expiração 48h, reserva de estoque automática ao aceitar
