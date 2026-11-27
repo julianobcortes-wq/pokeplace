@@ -282,9 +282,9 @@ export function verifyCronBearer(request: Request): { ok: boolean; status: numbe
   const secret = process.env["CRON_SECRET"]?.trim();
   if (!secret) return { ok: false, status: 503 };
   const auth = request.headers.get("authorization") ?? "";
-  if (!auth.startsWith("Bearer ")) return { ok: false, status: 401 };
-  const token = auth.slice("Bearer ".length).trim();
-  if (token.length !== secret.length) return { ok: false, status: 401 };
+  const headerSecret = request.headers.get("x-cron-secret")?.trim() ?? "";
+  const token = auth.startsWith("Bearer ") ? auth.slice("Bearer ".length).trim() : headerSecret;
+  if (!token || token.length !== secret.length) return { ok: false, status: 401 };
   let diff = 0;
   for (let i = 0; i < secret.length; i++) diff |= secret.charCodeAt(i) ^ token.charCodeAt(i);
   return diff === 0 ? { ok: true, status: 200 } : { ok: false, status: 401 };

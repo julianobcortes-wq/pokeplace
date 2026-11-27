@@ -58,7 +58,11 @@ function isH3SwallowedErrorBody(body: string): boolean {
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
     try {
-      hydrateEnvFromBindings(env);
+      const reqRuntimeEnv = (
+        request as Request & { runtime?: { cloudflare?: { env?: unknown } } }
+      ).runtime?.cloudflare?.env;
+      const globalEnv = (globalThis as { __env__?: unknown }).__env__;
+      hydrateEnvFromBindings(env ?? reqRuntimeEnv ?? globalEnv);
       const url = new URL(request.url);
       const ip = extractClientIp(request);
 

@@ -1,63 +1,40 @@
-# Guia de Deploy Permanente — Cloudflare Workers (PokePlace)
+# Deploy Zero-Touch — Cloudflare Workers + Supabase (PokePlace)
 
-Este projeto usa TanStack Start + Vite + Nitro com o preset `cloudflare-module` já configurado automaticamente pelo `@lovable.dev/vite-tanstack-config`. Ao rodar `npm run build`, o build gera:
-- `.output/server/wrangler.json` (configuração completa do Worker + assets estáticos de `.output/public`)
-- `.wrangler/deploy/config.json` (apontando para `.output/server/wrangler.json`)
+Todo o provisionamento de banco, Auth, build, Worker, assets estáticos, segredos, Cron Triggers e domínio permanente roda em um único comando automatizado.
 
-## 1. Conectar o Repositório no Dashboard da Cloudflare (2 minutos)
-1. Acesse [dash.cloudflare.com](https://dash.cloudflare.com) -> **Workers & Pages** -> **Create** -> **Import a repository**.
-2. Selecione o repositório `julianobcortes-wq/pokeplace` e a branch de produção `main`.
-3. Configure os comandos de build:
-   - **Build command**: `npm run build`
-   - **Deploy command**: `npx wrangler deploy`
-   - **Root directory**: `/` (raiz)
-   - **Node version**: `20` ou `22` (variável `NODE_VERSION=22`)
-4. Salve e inicie o primeiro deploy. Toda atualização na `main` fará deploy automático em uma URL permanente `https://<seu-worker>.workers.dev` (ou domínio customizado, ex. `pokeplace.com.br`).
+## Pré-requisitos (apenas 2 segredos no ambiente)
+Adicione como segredos de ambiente (nunca cole no chat ou no repositório):
+1. `CLOUDFLARE_API_TOKEN` — token com permissões **Workers Scripts: Edit** e **Account Settings: Read** (e **Zone / DNS: Edit** apenas se usar domínio customizado).
+2. `SUPABASE_ACCESS_TOKEN` — Personal Access Token da Supabase Management API (busca automaticamente `publishable` e `service_role`, aplica todas as migrations de forma idempotente e configura Auth Site URL + Redirect URLs).
 
-## 2. Variáveis de Ambiente e Secrets no Cloudflare Worker
-Em **Settings -> Variables and Secrets**, adicione:
+Alternativamente para o banco, `SUPABASE_DB_URL` (ou `DATABASE_URL`) também é suportado pelo script de provisionamento.
 
-### Obrigatórias para funcionar o marketplace em produção
-| Variável | Tipo | Descrição |
-|---|---|---|
-| `SUPABASE_URL` | Plaintext | URL do projeto Supabase (`https://<ref>.supabase.co`) |
-| `SUPABASE_PUBLISHABLE_KEY` | Plaintext | Chave pública/anon do Supabase |
-| `SUPABASE_PROJECT_ID` | Plaintext | ID do projeto Supabase |
-| `SUPABASE_SERVICE_ROLE_KEY` | Secret | Service Role Key do Supabase (usada apenas no servidor: webhooks, cron, admin) |
-| `APP_PUBLIC_URL` | Plaintext | URL pública final (ex.: `https://pokeplace.com.br` ou `https://<worker>.workers.dev`) |
-| `CRON_SECRET` | Secret | Segredo aleatório (32+ chars) exigido no header `x-cron-secret` dos endpoints `/api/cron/*` |
+## Execução única (tudo automatizado)
 
-> Nota: Para variáveis públicas injetadas no bundle Vite em tempo de build, configure também `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY` e `VITE_SUPABASE_PROJECT_ID` como Build Variables na Cloudflare.
+```bash
+npm run deploy:production
+```
 
-### Opcionais (Integrações Comerciais — ativam recursos automaticamente quando definidas)
-| Variável | Tipo | Descrição |
-|---|---|---|
-| `RESEND_API_KEY` | Secret | Chave da API Resend para envio real de e-mails transacionais |
-| `RESEND_FROM` | Plaintext | Remetente verificado no Resend (ex.: `PokePlace <avisos@pokeplace.com.br>`) |
-| `MP_ACCESS_TOKEN` | Secret | Access Token do Mercado Pago (Checkout Pro + estornos + conciliação) |
-| `MP_WEBHOOK_SECRET` | Secret | Assinatura secreta do Webhook no painel Mercado Pago (validação HMAC fail-closed) |
+O comando executa automaticamente:
+1. Gera `CRON_SECRET` criptográfico (256 bits) caso não exista no ambiente.
+2. Descobre o projeto Supabase (`supabase/config.toml` / Management API), busca as chaves de API, aplica `scripts/sql/all-migrations.sql` de forma idempotente (com rastreamento em `public.pokeplace_schema_migrations`) e popula o catálogo inicial caso esteja vazio.
+3. Descobre `CLOUDFLARE_ACCOUNT_ID` e o subdomínio permanente `*.workers.dev` (ou usa `CLOUDFLARE_CUSTOM_DOMAIN` se definido).
+4. Faz `npm run build` com `wrangler.jsonc` + plugin Nitro `server/plugins/cloudflare-cron.ts` (mesclados automaticamente em `.output/server/wrangler.json`).
+5. Executa um único `wrangler deploy --secrets-file <arquivo-temporario>` que envia atomica e simultaneamente:
+   - código do Worker + assets estáticos (`.output/public`)
+   - todos os secrets (`SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_PROJECT_ID`, `SUPABASE_SERVICE_ROLE_KEY`, `CRON_SECRET`, `APP_PUBLIC_URL` e integrações opcionais presentes no env)
+   - Cron Triggers nativos (`*/30 * * * *` -> `/api/cron/sync-prices?limit=10`, `0 * * * *` -> `/api/cron/orders-maintenance`)
+   - domínio permanente (`workers_dev: true` ou `--domain <CLOUDFLARE_CUSTOM_DOMAIN>`)
+6. Atualiza `site_url` e `uri_allow_list` no Supabase Auth via Management API para a URL permanente.
+7. Valida HTTP `200` em `/`, `/api/health` e nos endpoints de cron.
 
-> Segurança: Sem `MP_ACCESS_TOKEN` e `MP_WEBHOOK_SECRET`, pagamentos reais permanecem desabilitados em produção e webhooks são recusados com erro de configuração. Nunca habilite pagamentos simulados em produção.
+## Validação local sem credenciais
 
-## 3. Aplicar o Banco de Dados no Supabase
-1. Abra o **SQL Editor** no painel do Supabase.
-2. Cole e execute o conteúdo completo de `scripts/sql/all-migrations.sql` (o arquivo é 100% idempotente e pode ser reexecutado com segurança após atualizações).
-3. Opcional: defina o primeiro administrador executando:
-   ```sql
-   insert into public.user_roles (user_id, role)
-   values ('<SEU_USER_UUID>', 'admin')
-   on conflict do nothing;
-   ```
+```bash
+npm run deploy:dry-run
+```
 
-## 4. Configurar Tarefas Agendadas (Cron)
-Agende chamadas POST (via Cloudflare Cron Trigger, GitHub Actions ou cron externo) com o header `x-cron-secret: <CRON_SECRET>`:
-- **A cada 30 minutos**: `POST https://<dominio>/api/cron/sync-prices` (atualiza cotações de mercado em lotes seguros de até 10 cartas).
-- **A cada 1 hora**: `POST https://<dominio>/api/cron/orders-maintenance` (expira pedidos vencidos devolvendo estoque, expira ofertas vencidas de 48h, confirma entregas após 7 dias, envia avisos pré-confirmação e avalia alertas de preço).
-
-## 5. Webhook do Mercado Pago
-Quando ativar pagamentos reais:
-1. No painel de desenvolvedores do Mercado Pago, cadastre a URL de webhook:
-   `https://<dominio>/api/mercadopago/webhook`
-2. Ative o tópico `payment` (e opcionalmente `chargebacks` / `merchant_order`).
-3. Copie o segredo gerado para a variável `MP_WEBHOOK_SECRET` na Cloudflare.
-4. Teste a saúde geral em `GET https://<dominio>/api/health`.
+## Variáveis opcionais (ativam integrações comerciais automaticamente quando presentes)
+- `CLOUDFLARE_CUSTOM_DOMAIN` — domínio próprio (ex.: `pokeplace.com.br`)
+- `MP_ACCESS_TOKEN`, `MP_PUBLIC_KEY`, `MP_WEBHOOK_SECRET` — Mercado Pago (Checkout Pro / Pix + webhook HMAC em `/api/mercadopago/webhook`)
+- `RESEND_API_KEY`, `RESEND_FROM` — envio real de e-mails transacionais
