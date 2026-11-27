@@ -12,6 +12,8 @@ import { BuyerReviewForm, StoreProfileEditor, StoreReviews } from "@/components/
 import { BulkListingUpload } from "@/components/BulkListingUpload";
 import { BulkListingEditor } from "@/components/BulkListingEditor";
 import { ConditionGuide } from "@/components/ConditionGuide";
+import { OffersInbox } from "@/components/OffersInbox";
+import { SellerPromotions } from "@/components/SellerPromotions";
 import { supabase } from "@/integrations/supabase/client";
 import { searchCards } from "@/lib/catalog.functions";
 import type { Database } from "@/integrations/supabase/types";
@@ -133,6 +135,8 @@ function MyStore() {
         <StoreProfileEditor seller={seller} onDone={refresh} />
         <StoreReviews sellerId={seller.id} />
         <SellerInbox sellerId={seller.id} />
+        <OffersInbox mode="seller" sellerId={seller.id} />
+        <SellerPromotions sellerId={seller.id} />
         <ShippingEditor sellerId={seller.id} />
         <SellerFinance sellerId={seller.id} />
 

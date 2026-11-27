@@ -1834,4 +1834,500 @@ $$;
 REVOKE ALL ON FUNCTION public.get_card_reference_prices(text[]) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.get_card_reference_prices(text[]) TO authenticated, service_role;
 
+-- =====================================================================
+-- 0015_offers_coupons_promotions_shipping_uf.sql
+-- Phase 2 & Phase 3 core tables & SECURITY DEFINER RPCs:
+--   - shipping_profiles.state_rates & preferred_carrier
+--   - listing_offers ("Make an Offer" with 48h expiry & atomic reservation)
+--   - store_coupons & store_volume_discounts
+--   - place_order_v2 (UF shipping + volume tiers + store coupons)
+--   - get_wishlist_matches
+-- =====================================================================
+
+ALTER TABLE public.shipping_profiles
+  ADD COLUMN IF NOT EXISTS state_rates jsonb NOT NULL DEFAULT '{}'::jsonb,
+  ADD COLUMN IF NOT EXISTS preferred_carrier text NOT NULL DEFAULT 'correios';
+
+ALTER TABLE public.orders
+  ADD COLUMN IF NOT EXISTS discount_total numeric(12,2) NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS coupon_codes jsonb NOT NULL DEFAULT '{}'::jsonb;
+
+CREATE OR REPLACE FUNCTION public.shipping_fee_for_uf(_seller_id uuid, _subtotal numeric, _uf text DEFAULT NULL)
+RETURNS numeric
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  p record;
+  v_uf text;
+  v_base numeric;
+BEGIN
+  SELECT * INTO p FROM public.shipping_profiles WHERE seller_id = _seller_id;
+  IF NOT FOUND THEN RETURN 0; END IF;
+  IF p.free_over IS NOT NULL AND p.free_over > 0 AND _subtotal >= p.free_over THEN
+    RETURN 0;
+  END IF;
+  v_uf := upper(trim(coalesce(_uf, '')));
+  IF v_uf <> '' AND p.state_rates ? v_uf THEN
+    v_base := coalesce((p.state_rates ->> v_uf)::numeric, p.flat_fee);
+  ELSE
+    v_base := coalesce(p.flat_fee, 0);
+  END IF;
+  RETURN greatest(0, round(coalesce(v_base, 0), 2));
+END $$;
+GRANT EXECUTE ON FUNCTION public.shipping_fee_for_uf(uuid, numeric, text) TO anon, authenticated, service_role;
+
+-- Store discount coupons
+CREATE TABLE IF NOT EXISTS public.store_coupons (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  seller_id uuid NOT NULL REFERENCES public.sellers(id) ON DELETE CASCADE,
+  code text NOT NULL CHECK (code ~ '^[A-Z0-9_-]{3,24}$'),
+  discount_type text NOT NULL CHECK (discount_type IN ('percent', 'fixed')),
+  discount_value numeric(12,2) NOT NULL CHECK (discount_value > 0),
+  min_order_amount numeric(12,2) NOT NULL DEFAULT 0 CHECK (min_order_amount >= 0),
+  max_uses int CHECK (max_uses IS NULL OR max_uses >= 1),
+  uses_count int NOT NULL DEFAULT 0 CHECK (uses_count >= 0),
+  expires_at timestamptz,
+  active boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (seller_id, code)
+);
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.store_coupons TO authenticated;
+GRANT ALL ON public.store_coupons TO service_role;
+ALTER TABLE public.store_coupons ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS store_coupons_read_own ON public.store_coupons;
+CREATE POLICY store_coupons_read_own ON public.store_coupons
+  FOR SELECT TO authenticated
+  USING (public.owns_seller(seller_id) OR public.has_role(auth.uid(), 'admin'));
+DROP POLICY IF EXISTS store_coupons_manage_own ON public.store_coupons;
+CREATE POLICY store_coupons_manage_own ON public.store_coupons
+  FOR ALL TO authenticated
+  USING (public.owns_seller(seller_id))
+  WITH CHECK (public.owns_seller(seller_id));
+
+-- Store volume discounts (e.g. buy 3+ cards get 5% off)
+CREATE TABLE IF NOT EXISTS public.store_volume_discounts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  seller_id uuid NOT NULL REFERENCES public.sellers(id) ON DELETE CASCADE,
+  min_qty int NOT NULL CHECK (min_qty BETWEEN 2 AND 100),
+  discount_pct numeric(5,2) NOT NULL CHECK (discount_pct > 0 AND discount_pct <= 50),
+  active boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (seller_id, min_qty)
+);
+GRANT SELECT ON public.store_volume_discounts TO anon, authenticated;
+GRANT INSERT, UPDATE, DELETE ON public.store_volume_discounts TO authenticated;
+GRANT ALL ON public.store_volume_discounts TO service_role;
+ALTER TABLE public.store_volume_discounts ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS store_volume_read ON public.store_volume_discounts;
+CREATE POLICY store_volume_read ON public.store_volume_discounts
+  FOR SELECT TO anon, authenticated
+  USING (active = true OR public.owns_seller(seller_id) OR public.has_role(auth.uid(), 'admin'));
+DROP POLICY IF EXISTS store_volume_manage ON public.store_volume_discounts;
+CREATE POLICY store_volume_manage ON public.store_volume_discounts
+  FOR ALL TO authenticated
+  USING (public.owns_seller(seller_id))
+  WITH CHECK (public.owns_seller(seller_id));
+
+CREATE OR REPLACE FUNCTION public.validate_store_coupon(_seller_id uuid, _code text, _subtotal numeric)
+RETURNS TABLE(valid boolean, reason text, discount numeric, code text, discount_type text, discount_value numeric)
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  c record;
+  v_code text := upper(regexp_replace(trim(coalesce(_code, '')), '\s+', '', 'g'));
+  v_disc numeric;
+BEGIN
+  IF v_code = '' THEN
+    RETURN QUERY SELECT false, 'Informe um código de cupom.', 0::numeric, ''::text, ''::text, 0::numeric;
+    RETURN;
+  END IF;
+  SELECT * INTO c FROM public.store_coupons sc WHERE sc.seller_id = _seller_id AND sc.code = v_code AND sc.active = true;
+  IF NOT FOUND THEN
+    RETURN QUERY SELECT false, 'Cupom inválido ou inativo nesta loja.', 0::numeric, v_code, ''::text, 0::numeric;
+    RETURN;
+  END IF;
+  IF c.expires_at IS NOT NULL AND c.expires_at <= now() THEN
+    RETURN QUERY SELECT false, 'Este cupom expirou.', 0::numeric, c.code, c.discount_type, c.discount_value;
+    RETURN;
+  END IF;
+  IF c.max_uses IS NOT NULL AND c.uses_count >= c.max_uses THEN
+    RETURN QUERY SELECT false, 'Este cupom atingiu o limite de usos.', 0::numeric, c.code, c.discount_type, c.discount_value;
+    RETURN;
+  END IF;
+  IF _subtotal < coalesce(c.min_order_amount, 0) THEN
+    RETURN QUERY SELECT false, 'Subtotal abaixo do pedido mínimo do cupom.', 0::numeric, c.code, c.discount_type, c.discount_value;
+    RETURN;
+  END IF;
+  IF c.discount_type = 'percent' THEN
+    v_disc := round(_subtotal * (least(c.discount_value, 80) / 100.0), 2);
+  ELSE
+    v_disc := round(c.discount_value, 2);
+  END IF;
+  v_disc := least(greatest(0, _subtotal - 0.01), greatest(0, v_disc));
+  RETURN QUERY SELECT true, NULL::text, v_disc, c.code, c.discount_type, c.discount_value;
+END $$;
+GRANT EXECUTE ON FUNCTION public.validate_store_coupon(uuid, text, numeric) TO authenticated, service_role;
+
+-- Listing Offers ("Fazer oferta")
+CREATE TABLE IF NOT EXISTS public.listing_offers (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  listing_id uuid NOT NULL REFERENCES public.listings(id) ON DELETE CASCADE,
+  card_id text NOT NULL REFERENCES public.cards(id),
+  seller_id uuid NOT NULL REFERENCES public.sellers(id) ON DELETE CASCADE,
+  buyer_id uuid NOT NULL,
+  quantity int NOT NULL DEFAULT 1 CHECK (quantity >= 1),
+  listing_price numeric(12,2) NOT NULL CHECK (listing_price > 0),
+  offered_price numeric(12,2) NOT NULL CHECK (offered_price > 0),
+  counter_price numeric(12,2) CHECK (counter_price IS NULL OR counter_price > 0),
+  status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'countered', 'accepted', 'declined', 'expired', 'cancelled')),
+  message text CHECK (message IS NULL OR length(message) <= 300),
+  order_id uuid REFERENCES public.orders(id),
+  expires_at timestamptz NOT NULL DEFAULT now() + interval '48 hours',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_listing_offers_buyer ON public.listing_offers(buyer_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_listing_offers_seller ON public.listing_offers(seller_id, status, created_at DESC);
+GRANT SELECT ON public.listing_offers TO authenticated;
+GRANT ALL ON public.listing_offers TO service_role;
+ALTER TABLE public.listing_offers ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS listing_offers_read ON public.listing_offers;
+CREATE POLICY listing_offers_read ON public.listing_offers
+  FOR SELECT TO authenticated
+  USING (buyer_id = auth.uid() OR public.owns_seller(seller_id) OR public.has_role(auth.uid(), 'admin'));
+
+CREATE OR REPLACE FUNCTION public.expire_stale_offers() RETURNS int
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_count int;
+BEGIN
+  UPDATE public.listing_offers
+     SET status = 'expired', updated_at = now()
+   WHERE status IN ('pending', 'countered')
+     AND expires_at <= now();
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  RETURN v_count;
+END $$;
+GRANT EXECUTE ON FUNCTION public.expire_stale_offers() TO authenticated, service_role;
+
+CREATE OR REPLACE FUNCTION public.submit_listing_offer(
+  _listing_id uuid,
+  _offered_price numeric,
+  _quantity int DEFAULT 1,
+  _message text DEFAULT NULL
+) RETURNS uuid
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  l record;
+  v_id uuid;
+  v_min numeric;
+BEGIN
+  IF auth.uid() IS NULL THEN RAISE EXCEPTION 'Faça login para enviar uma proposta'; END IF;
+  PERFORM public.expire_stale_offers();
+  SELECT li.*, s.user_id AS seller_user_id INTO l
+    FROM public.listings li
+    JOIN public.sellers s ON s.id = li.seller_id
+   WHERE li.id = _listing_id AND li.status = 'active' AND s.status = 'approved';
+  IF NOT FOUND THEN RAISE EXCEPTION 'Anúncio indisponível para proposta'; END IF;
+  IF l.seller_user_id = auth.uid() THEN RAISE EXCEPTION 'Você não pode fazer proposta no próprio anúncio'; END IF;
+  IF _quantity IS NULL OR _quantity < 1 OR _quantity > l.quantity THEN RAISE EXCEPTION 'Quantidade fora do estoque disponível'; END IF;
+  v_min := greatest(0.01, round(l.price * 0.50, 2));
+  IF _offered_price IS NULL OR _offered_price < v_min THEN RAISE EXCEPTION 'A proposta mínima é 50%% do valor anunciado'; END IF;
+  IF _offered_price >= l.price THEN RAISE EXCEPTION 'A proposta deve ser menor que o valor anunciado'; END IF;
+  IF _message IS NOT NULL AND length(trim(_message)) > 300 THEN RAISE EXCEPTION 'Mensagem excede 300 caracteres'; END IF;
+
+  INSERT INTO public.listing_offers (
+    listing_id, card_id, seller_id, buyer_id, quantity, listing_price, offered_price, message, expires_at
+  ) VALUES (
+    l.id, l.card_id, l.seller_id, auth.uid(), _quantity, l.price, round(_offered_price, 2), nullif(trim(coalesce(_message, '')), ''), now() + interval '48 hours'
+  ) RETURNING id INTO v_id;
+
+  PERFORM public.notify(l.seller_user_id, 'Nova proposta recebida', 'Um comprador enviou uma proposta em um anúncio da sua loja.', '/minha-loja');
+  RETURN v_id;
+END $$;
+GRANT EXECUTE ON FUNCTION public.submit_listing_offer(uuid, numeric, int, text) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.respond_listing_offer(
+  _offer_id uuid,
+  _decision text,
+  _counter_price numeric DEFAULT NULL
+) RETURNS uuid
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  o record;
+  l record;
+  v_order uuid := NULL;
+  v_rate numeric := 0;
+  v_sub numeric;
+  v_com numeric;
+  v_ship numeric;
+BEGIN
+  IF auth.uid() IS NULL THEN RAISE EXCEPTION 'Acesso negado'; END IF;
+  PERFORM public.expire_stale_offers();
+  SELECT * INTO o FROM public.listing_offers WHERE id = _offer_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Proposta não encontrada'; END IF;
+  IF NOT public.owns_seller(o.seller_id) THEN RAISE EXCEPTION 'Somente a loja pode responder a esta proposta'; END IF;
+  IF o.status <> 'pending' THEN RAISE EXCEPTION 'Esta proposta não está mais pendente'; END IF;
+  IF o.expires_at <= now() THEN
+    UPDATE public.listing_offers SET status = 'expired', updated_at = now() WHERE id = o.id;
+    RAISE EXCEPTION 'Proposta expirada';
+  END IF;
+
+  IF _decision = 'decline' THEN
+    UPDATE public.listing_offers SET status = 'declined', updated_at = now() WHERE id = o.id;
+    PERFORM public.notify(o.buyer_id, 'Proposta recusada', 'A loja recusou sua proposta.', '/pedidos');
+    RETURN NULL;
+  ELSIF _decision = 'counter' THEN
+    IF _counter_price IS NULL OR _counter_price <= o.offered_price OR _counter_price > o.listing_price THEN
+      RAISE EXCEPTION 'Contra-oferta deve ficar entre a proposta do comprador e o preço do anúncio';
+    END IF;
+    UPDATE public.listing_offers
+       SET status = 'countered',
+           counter_price = round(_counter_price, 2),
+           expires_at = now() + interval '48 hours',
+           updated_at = now()
+     WHERE id = o.id;
+    PERFORM public.notify(o.buyer_id, 'Contra-oferta recebida', 'A loja enviou uma contra-oferta válida por 48h.', '/pedidos');
+    RETURN NULL;
+  ELSIF _decision = 'accept' THEN
+    SELECT * INTO l FROM public.listings WHERE id = o.listing_id AND status = 'active' FOR UPDATE;
+    IF NOT FOUND OR l.quantity < o.quantity THEN RAISE EXCEPTION 'Estoque insuficiente para aceitar a proposta'; END IF;
+    UPDATE public.listings
+       SET quantity = quantity - o.quantity,
+           status = CASE WHEN quantity - o.quantity = 0 THEN 'sold_out' ELSE status END,
+           updated_at = now()
+     WHERE id = l.id;
+    SELECT coalesce((value #>> '{}')::numeric, 0) INTO v_rate FROM public.platform_settings WHERE key = 'commission_rate';
+    v_sub := round(o.offered_price * o.quantity, 2);
+    v_com := round(v_sub * coalesce(v_rate, 0), 2);
+    v_ship := public.shipping_fee_for_uf(o.seller_id, v_sub, NULL);
+
+    INSERT INTO public.orders (buyer_id, subtotal, shipping_total, commission_total, seller_total, ship_name, ship_address, ship_city, ship_state, ship_zip, expires_at)
+    VALUES (o.buyer_id, v_sub, v_ship, v_com, v_sub - v_com + v_ship, 'A confirmar no pedido', 'Informe no chat do pedido', 'A definir', 'SP', '00000-000', now() + interval '24 hours')
+    RETURNING id INTO v_order;
+
+    INSERT INTO public.order_items (order_id, listing_id, seller_id, card_id, quantity, unit_price, commission_rate, commission_amount, seller_amount)
+    VALUES (v_order, l.id, l.seller_id, l.card_id, o.quantity, o.offered_price, coalesce(v_rate, 0), v_com, v_sub - v_com);
+
+    INSERT INTO public.order_shipments (order_id, seller_id, amount) VALUES (v_order, l.seller_id, v_ship);
+    INSERT INTO public.payments (order_id, provider, environment, amount, currency) VALUES (v_order, 'mercadopago', 'live', v_sub + v_ship, 'BRL');
+
+    UPDATE public.listing_offers SET status = 'accepted', order_id = v_order, updated_at = now() WHERE id = o.id;
+    PERFORM public.notify(o.buyer_id, 'Proposta aceita!', 'Sua proposta foi aceita e o estoque foi reservado por 24h. Conclua o pagamento.', '/pedidos/' || v_order::text);
+    RETURN v_order;
+  ELSE
+    RAISE EXCEPTION 'Decisão inválida';
+  END IF;
+END $$;
+GRANT EXECUTE ON FUNCTION public.respond_listing_offer(uuid, text, numeric) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.buyer_accept_counter_offer(_offer_id uuid, _ship jsonb DEFAULT '{}'::jsonb)
+RETURNS uuid
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  o record;
+  l record;
+  v_order uuid;
+  v_rate numeric := 0;
+  v_sub numeric;
+  v_com numeric;
+  v_ship numeric;
+BEGIN
+  IF auth.uid() IS NULL THEN RAISE EXCEPTION 'Faça login para aceitar a contra-oferta'; END IF;
+  PERFORM public.expire_stale_offers();
+  SELECT * INTO o FROM public.listing_offers WHERE id = _offer_id FOR UPDATE;
+  IF NOT FOUND OR o.buyer_id <> auth.uid() THEN RAISE EXCEPTION 'Contra-oferta não encontrada'; END IF;
+  IF o.status <> 'countered' OR o.counter_price IS NULL THEN RAISE EXCEPTION 'Esta proposta não possui contra-oferta ativa'; END IF;
+  IF o.expires_at <= now() THEN
+    UPDATE public.listing_offers SET status = 'expired', updated_at = now() WHERE id = o.id;
+    RAISE EXCEPTION 'Contra-oferta expirada';
+  END IF;
+
+  SELECT * INTO l FROM public.listings WHERE id = o.listing_id AND status = 'active' FOR UPDATE;
+  IF NOT FOUND OR l.quantity < o.quantity THEN RAISE EXCEPTION 'Estoque insuficiente'; END IF;
+  UPDATE public.listings
+     SET quantity = quantity - o.quantity,
+         status = CASE WHEN quantity - o.quantity = 0 THEN 'sold_out' ELSE status END,
+         updated_at = now()
+   WHERE id = l.id;
+
+  SELECT coalesce((value #>> '{}')::numeric, 0) INTO v_rate FROM public.platform_settings WHERE key = 'commission_rate';
+  v_sub := round(o.counter_price * o.quantity, 2);
+  v_com := round(v_sub * coalesce(v_rate, 0), 2);
+  v_ship := public.shipping_fee_for_uf(o.seller_id, v_sub, _ship->>'state');
+
+  INSERT INTO public.orders (buyer_id, subtotal, shipping_total, commission_total, seller_total, ship_name, ship_address, ship_city, ship_state, ship_zip, expires_at)
+  VALUES (
+    o.buyer_id, v_sub, v_ship, v_com, v_sub - v_com + v_ship,
+    coalesce(nullif(_ship->>'name', ''), 'A confirmar no pedido'),
+    coalesce(nullif(_ship->>'address', ''), 'Informe no chat do pedido'),
+    coalesce(nullif(_ship->>'city', ''), 'A definir'),
+    coalesce(nullif(_ship->>'state', ''), 'SP'),
+    coalesce(nullif(_ship->>'zip', ''), '00000-000'),
+    now() + interval '24 hours'
+  ) RETURNING id INTO v_order;
+
+  INSERT INTO public.order_items (order_id, listing_id, seller_id, card_id, quantity, unit_price, commission_rate, commission_amount, seller_amount)
+  VALUES (v_order, l.id, l.seller_id, l.card_id, o.quantity, o.counter_price, coalesce(v_rate, 0), v_com, v_sub - v_com);
+
+  INSERT INTO public.order_shipments (order_id, seller_id, amount) VALUES (v_order, l.seller_id, v_ship);
+  INSERT INTO public.payments (order_id, provider, environment, amount, currency) VALUES (v_order, 'mercadopago', 'live', v_sub + v_ship, 'BRL');
+
+  UPDATE public.listing_offers SET status = 'accepted', order_id = v_order, updated_at = now() WHERE id = o.id;
+  PERFORM public.notify((SELECT user_id FROM public.sellers WHERE id = o.seller_id), 'Contra-oferta aceita', 'O comprador aceitou sua contra-oferta. Aguardando pagamento.', '/minha-loja');
+  RETURN v_order;
+END $$;
+GRANT EXECUTE ON FUNCTION public.buyer_accept_counter_offer(uuid, jsonb) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.cancel_listing_offer(_offer_id uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE o record;
+BEGIN
+  SELECT * INTO o FROM public.listing_offers WHERE id = _offer_id FOR UPDATE;
+  IF NOT FOUND OR o.buyer_id <> auth.uid() THEN RAISE EXCEPTION 'Proposta não encontrada'; END IF;
+  IF o.status NOT IN ('pending', 'countered') THEN RAISE EXCEPTION 'Proposta já encerrada'; END IF;
+  UPDATE public.listing_offers SET status = 'cancelled', updated_at = now() WHERE id = o.id;
+END $$;
+GRANT EXECUTE ON FUNCTION public.cancel_listing_offer(uuid) TO authenticated;
+
+-- Upgraded place_order_v2 supporting UF shipping, volume tiers & store coupons
+CREATE OR REPLACE FUNCTION public.place_order_v2(_items jsonb, _ship jsonb, _coupons jsonb DEFAULT '{}'::jsonb)
+RETURNS uuid
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $function$
+DECLARE
+  v_order uuid;
+  v_rate numeric;
+  it jsonb;
+  l record;
+  v_sub numeric := 0;
+  v_com numeric := 0;
+  v_disc_total numeric := 0;
+  v_ship_total numeric := 0;
+  q int;
+  c numeric;
+  s record;
+  v_vol_pct numeric;
+  v_vol_disc numeric;
+  v_coupon_code text;
+  v_coupon_res record;
+  v_store_disc numeric;
+  v_store_net numeric;
+  v_store_ship numeric;
+  v_applied_coupons jsonb := '{}'::jsonb;
+  v_uf text := upper(trim(coalesce(_ship->>'state', '')));
+BEGIN
+  IF auth.uid() IS NULL THEN RAISE EXCEPTION 'Faça login para comprar'; END IF;
+  IF _items IS NULL OR jsonb_array_length(_items) = 0 THEN RAISE EXCEPTION 'Carrinho vazio'; END IF;
+  IF jsonb_array_length(_items) > 50 THEN RAISE EXCEPTION 'Carrinho muito grande'; END IF;
+  PERFORM public.expire_unpaid_orders();
+  SELECT coalesce((value #>> '{}')::numeric, 0) INTO v_rate FROM public.platform_settings WHERE key = 'commission_rate';
+  v_rate := coalesce(v_rate, 0);
+
+  INSERT INTO public.orders (buyer_id, subtotal, commission_total, seller_total, ship_name, ship_address, ship_city, ship_state, ship_zip, expires_at)
+  VALUES (auth.uid(), 0, 0, 0, _ship->>'name', _ship->>'address', _ship->>'city', _ship->>'state', _ship->>'zip', now() + interval '15 minutes')
+  RETURNING id INTO v_order;
+
+  FOR it IN SELECT * FROM jsonb_array_elements(_items) LOOP
+    q := (it->>'quantity')::int;
+    IF q IS NULL OR q < 1 THEN RAISE EXCEPTION 'Quantidade inválida'; END IF;
+    SELECT li.* INTO l FROM public.listings li JOIN public.sellers s2 ON s2.id = li.seller_id
+      WHERE li.id = (it->>'listing_id')::uuid AND li.status = 'active' AND s2.status = 'approved' FOR UPDATE OF li;
+    IF NOT FOUND THEN RAISE EXCEPTION 'Oferta indisponível'; END IF;
+    IF l.quantity < q THEN RAISE EXCEPTION 'Estoque insuficiente'; END IF;
+    IF public.owns_seller(l.seller_id) THEN RAISE EXCEPTION 'Você não pode comprar da sua própria loja'; END IF;
+    UPDATE public.listings SET quantity = quantity - q, status = CASE WHEN quantity - q = 0 THEN 'sold_out' ELSE status END, updated_at = now() WHERE id = l.id;
+    c := round(l.price * q * v_rate, 2);
+    INSERT INTO public.order_items (order_id, listing_id, seller_id, card_id, quantity, unit_price, commission_rate, commission_amount, seller_amount)
+    VALUES (v_order, l.id, l.seller_id, l.card_id, q, l.price, v_rate, c, l.price * q - c);
+    v_sub := v_sub + l.price * q;
+    v_com := v_com + c;
+  END LOOP;
+
+  FOR s IN SELECT seller_id, sum(unit_price * quantity) AS sub, sum(quantity)::int AS qty FROM public.order_items WHERE order_id = v_order GROUP BY seller_id LOOP
+    -- Volume tier discount
+    SELECT coalesce(max(discount_pct), 0) INTO v_vol_pct
+      FROM public.store_volume_discounts
+     WHERE seller_id = s.seller_id AND active = true AND min_qty <= s.qty;
+    v_vol_disc := round(s.sub * (coalesce(v_vol_pct, 0) / 100.0), 2);
+    v_store_disc := v_vol_disc;
+
+    -- Optional store coupon
+    v_coupon_code := upper(regexp_replace(trim(coalesce(_coupons ->> s.seller_id::text, '')), '\s+', '', 'g'));
+    IF v_coupon_code <> '' THEN
+      SELECT * INTO v_coupon_res FROM public.validate_store_coupon(s.seller_id, v_coupon_code, greatest(0, s.sub - v_vol_disc));
+      IF v_coupon_res.valid THEN
+        v_store_disc := v_store_disc + coalesce(v_coupon_res.discount, 0);
+        UPDATE public.store_coupons SET uses_count = uses_count + 1, updated_at = now() WHERE seller_id = s.seller_id AND code = v_coupon_code;
+        v_applied_coupons := v_applied_coupons || jsonb_build_object(s.seller_id::text, v_coupon_code);
+      END IF;
+    END IF;
+
+    v_store_net := greatest(0.01, round(s.sub - v_store_disc, 2));
+    v_store_ship := public.shipping_fee_for_uf(s.seller_id, v_store_net, v_uf);
+    v_disc_total := v_disc_total + v_store_disc;
+    v_ship_total := v_ship_total + v_store_ship;
+
+    INSERT INTO public.order_shipments (order_id, seller_id, amount) VALUES (v_order, s.seller_id, v_store_ship);
+    PERFORM public.notify((SELECT user_id FROM public.sellers WHERE id = s.seller_id), 'Nova venda', 'Você recebeu um novo pedido.', '/minha-loja');
+  END LOOP;
+
+  v_sub := greatest(0.01, round(v_sub - v_disc_total, 2));
+  v_com := round(v_sub * v_rate, 2);
+
+  UPDATE public.orders
+     SET subtotal = v_sub,
+         discount_total = v_disc_total,
+         coupon_codes = v_applied_coupons,
+         shipping_total = v_ship_total,
+         commission_total = v_com,
+         seller_total = v_sub - v_com + v_ship_total
+   WHERE id = v_order;
+
+  INSERT INTO public.payments (order_id, provider, environment, amount, currency)
+  VALUES (v_order, 'mercadopago', 'live', v_sub + v_ship_total, 'BRL');
+
+  RETURN v_order;
+END $function$;
+GRANT EXECUTE ON FUNCTION public.place_order_v2(jsonb, jsonb, jsonb) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.place_order(_items jsonb, _ship jsonb) RETURNS uuid
+LANGUAGE sql SECURITY DEFINER SET search_path = public AS $$
+  SELECT public.place_order_v2(_items, _ship, '{}'::jsonb);
+$$;
+GRANT EXECUTE ON FUNCTION public.place_order(jsonb, jsonb) TO authenticated;
+
+-- Wishlist target-price matching RPC
+CREATE OR REPLACE FUNCTION public.get_wishlist_matches()
+RETURNS TABLE(
+  entry_id uuid,
+  card_id text,
+  target_price numeric,
+  lowest_listing_price numeric,
+  listing_count bigint
+)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT
+    ce.id AS entry_id,
+    ce.card_id,
+    ce.target_price,
+    min(l.price) AS lowest_listing_price,
+    count(l.id) AS listing_count
+  FROM public.collection_entries ce
+  JOIN public.listings l ON l.card_id = ce.card_id AND l.status = 'active' AND l.quantity > 0
+  JOIN public.sellers s ON s.id = l.seller_id AND s.status = 'approved'
+  WHERE ce.user_id = auth.uid()
+    AND ce.kind = 'wanted'
+    AND ce.target_price IS NOT NULL
+    AND l.price <= ce.target_price
+  GROUP BY ce.id, ce.card_id, ce.target_price;
+$$;
+GRANT EXECUTE ON FUNCTION public.get_wishlist_matches() TO authenticated;
+
+
 

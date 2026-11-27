@@ -34,10 +34,10 @@ Plano mestre vivo para fechamento completo e comercial do marketplace **PokePlac
 - [x] Galeria de fotos reais por unidade com rótulos frente/verso/detalhes e navegação lightbox (`NewListing` + `ListingPhotos`)
 
 ### Fase 2 — Funcionalidades dos Compradores e Conversão
-- [ ] Sistema de propostas ("Fazer oferta"): envio, contra-oferta, aceite/recusa, expiração 48h, reserva de estoque automática ao aceitar
-- [ ] Lista de desejos com preço-alvo (`target_price`) e destaque/alerta quando houver oferta abaixo do alvo
-- [ ] Cupons de desconto por loja (`store_coupons`) + descontos progressivos por volume (`store_volume_discounts`)
-- [ ] Carrinho e checkout exibindo frete por UF, cupons e descontos antes do pagamento
+- [x] Sistema de propostas ("Fazer oferta"): envio, contra-oferta, aceite/recusa, expiração 48h, reserva de estoque automática ao aceitar (`0015`, `offers.ts`, `OfferModal.tsx`, `OffersInbox.tsx`)
+- [x] RPC de correspondência de lista de desejos com preço-alvo (`get_wishlist_matches` em `0015`; UI integrada na Fase 5 em `colecao.tsx`)
+- [x] Cupons de desconto por loja (`store_coupons`) + descontos progressivos por volume (`store_volume_discounts`, `promotions.ts`, `SellerPromotions.tsx`)
+- [x] Carrinho e checkout exibindo frete por UF, barra de progresso de frete grátis, cupons e descontos por volume antes do pagamento (`carrinho.tsx` + `place_order_v2`)
 
 ### Fase 3 — Pedidos, Checkout, Logística, Comunicação e Mercado Pago Completo
 - [ ] Frete por UF (`shipping_profiles.state_rates`), frete grátis configurável, transportadora e link de rastreio

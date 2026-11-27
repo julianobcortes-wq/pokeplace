@@ -1,7 +1,9 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { Package } from "lucide-react";
+import { OffersInbox } from "@/components/OffersInbox";
 import { PageShell } from "@/components/SiteHeader";
+import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { BRAND, ORDER_STATUS, money } from "@/lib/format";
 
@@ -29,6 +31,7 @@ const STATUS_STYLE: Record<string, string> = {
 };
 
 function Orders() {
+  const { user } = useAuth();
   const { data = [], isPending } = useQuery({
     queryKey: ["my-orders"],
     queryFn: async () => {
@@ -87,6 +90,12 @@ function Orders() {
                 </Link>
               );
             })}
+          </div>
+        )}
+
+        {user && (
+          <div className="mt-8">
+            <OffersInbox mode="buyer" userId={user.id} />
           </div>
         )}
       </main>

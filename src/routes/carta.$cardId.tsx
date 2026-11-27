@@ -11,6 +11,7 @@ import { Change, HoloCard, SellerLine } from "@/components/market";
 import { CollectionActions } from "@/components/CollectionActions";
 import { ConditionGuide } from "@/components/ConditionGuide";
 import { ListingPhotos } from "@/components/ListingPhotos";
+import { OfferModal } from "@/components/OfferModal";
 import { Button } from "@/components/ui/button";
 import { getCard } from "@/lib/catalog.functions";
 import { getCardQuote, type CardQuote } from "@/lib/pricing/quote";
@@ -320,12 +321,22 @@ function CardPage() {
                     <span className="px-1 text-muted-foreground">{o.quantity} em estoque</span>
                   </div>
                   <p className="num text-2xl font-bold">{money(Number(o.price), o.currency)}</p>
-                  <Button
-                    onClick={() => add(o)}
-                    className="rounded-full bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition hover:opacity-90"
-                  >
-                    Adicionar
-                  </Button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      onClick={() => add(o)}
+                      className="rounded-full bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition hover:opacity-90"
+                    >
+                      Adicionar
+                    </Button>
+                    <OfferModal
+                      listingId={o.listing_id}
+                      cardName={`${card.name} #${card.number}`}
+                      storeName={o.store_name}
+                      listingPrice={Number(o.price)}
+                      maxQty={o.quantity}
+                      currency={o.currency}
+                    />
+                  </div>
                 </div>
               ))}
               <p className="flex items-center gap-2 text-xs text-muted-foreground">
