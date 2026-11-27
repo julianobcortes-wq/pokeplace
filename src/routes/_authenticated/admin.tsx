@@ -156,7 +156,7 @@ function LaunchReadinessPanel() {
   const runPrices = async () => {
     setBusy("prices");
     try {
-      const res = await runAdminPriceSync({ data: { limit: 30 } });
+      const res = await runAdminPriceSync({ data: { limit: 10 } });
       toast.success(`Sincronizadas ${res.inserted} cotações de ${res.checked} cartas`);
       await qc.invalidateQueries({ queryKey: ["admin-readiness"] });
     } catch (e) {

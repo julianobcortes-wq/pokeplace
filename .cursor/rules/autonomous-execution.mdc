@@ -1,0 +1,39 @@
+---
+description: Diretriz permanente de execução autônoma contínua do marketplace PokePlace
+alwaysApply: true
+---
+
+# Diretriz Permanente de Execução Autônoma — PokePlace
+
+## 1. Autonomia de Execução Contínua
+- Execute o escopo completo até o fechamento definitivo, sem pausar entre etapas para pedir autorização de decisões técnicas ou da próxima fase.
+- Não encerre uma execução apenas porque concluiu um commit ou PR enquanto ainda existirem tarefas técnicas executáveis no plano.
+- Ao concluir uma tarefa, valide com testes e inicie imediatamente a próxima.
+- Não considere uma funcionalidade pronta apenas pela interface: exija frontend, backend, persistência (SQL idempotente em `scripts/sql/all-migrations.sql`), validação, controle de permissões, tratamento de erros, responsividade e testes.
+
+## 2. Regras de Repositório e Segurança
+- **Nunca** force push, rebase, amend ou squash em commits já enviados (compatibilidade Lovable).
+- **Nunca** edite `drizzle/`, `supabase/migrations/` ou arquivos gerados do cliente Supabase; toda alteração de banco deve ser adicionada de forma idempotente em `scripts/sql/all-migrations.sql`.
+- **Nunca** exponha segredos, execute operações destrutivas em produção ou simule pagamentos reais como aprovados.
+- Regras críticas de negócio (curadoria, estoque, comissões, ofertas, cupons, frete, disputas, reputação) devem ser garantidas no servidor e no banco (SECURITY DEFINER + RLS), nunca apenas no frontend.
+
+## 3. Dependências Externas
+- A ausência de credenciais ou serviços externos nunca deve bloquear o desenvolvimento das demais funcionalidades.
+- Implemente toda a estrutura técnica, use sandbox/stubs seguros onde apropriado, documente as variáveis de ambiente e ações externas necessárias, mantenha integrações reais desabilitadas sem credenciais válidas e avance imediatamente.
+
+## 4. Rastreamento Persistente
+- Mantenha sempre atualizados na raiz do repositório:
+  - `MASTER_PLAN.md` (fases, funcionalidades, status, dependências, bugs, testes, bloqueios externos, próxima tarefa).
+  - `EXECUTION_STATE.md` (estado atual exato e ponto de retomada imediata em caso de reinicialização).
+- Atualize ambos continuamente ao avançar entre marcos e antes de encerrar qualquer sessão.
+
+## 5. Ciclo Contínuo e Auditoria Final
+1. Analisar estado atual e próxima prioridade.
+2. Implementar frontend, backend, SQL e testes.
+3. Rodar testes (`npx vitest run`), checagem de tipos (`npx tsc --noEmit`) e build (`npm run build`).
+4. Corrigir falhas, validar integração e atualizar `MASTER_PLAN.md` e `EXECUTION_STATE.md`.
+5. Commitar de forma organizada e seguir para a próxima tarefa.
+6. Antes de encerrar, executar auditoria independente completa (links quebrados, botões inoperantes, TODOs críticos, segurança, RLS, pagamentos, responsividade, build) e corrigir qualquer pendência executável encontrada.
+
+## 6. Condição Única de Encerramento
+- Encerre voluntariamente apenas quando todas as fases executáveis estiverem implementadas, testadas, compilando sem erros e auditadas, restando exclusivamente ações externas que dependam do proprietário do projeto (credenciais, deploy inicial na Cloudflare, execução do SQL no Supabase, ativação em produção).
