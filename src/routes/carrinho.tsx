@@ -44,6 +44,7 @@ function CartPage() {
     queryKey: ["payment-options"],
     queryFn: () => getPaymentOptions(),
     staleTime: 60_000,
+    enabled: !!user,
   });
 
   const { data: sellers = [] } = useQuery({
@@ -234,9 +235,11 @@ function CartPage() {
               <ShieldCheck className="h-4 w-4 text-success" /> Compra Garantida PokePlace
             </p>
             <p className="mt-1">
-              {payOpts?.mercadoPago
-                ? "Pagamento via Mercado Pago (Pix, cartão e boleto) com proteção antifraude. Cartas reservadas por 15 minutos."
-                : "Cartas reservadas por 15 minutos após fechar o pedido. Pagamento online via Mercado Pago será habilitado assim que as chaves da loja estiverem ativas."}{" "}
+              {payOpts === undefined
+                ? "Cartas reservadas por 15 minutos após fechar o pedido. O pagamento é feito na etapa seguinte, com proteção antifraude."
+                : payOpts.mercadoPago
+                  ? "Pagamento via Mercado Pago (Pix, cartão e boleto) com proteção antifraude. Cartas reservadas por 15 minutos."
+                  : "Cartas reservadas por 15 minutos após fechar o pedido. Pagamento online via Mercado Pago será habilitado assim que as chaves da loja estiverem ativas."}{" "}
               <Link to="/compra-garantida" className="text-primary underline">
                 Saiba mais
               </Link>

@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { createCheckoutPreference, mercadoPagoConfigured, sandboxPaymentsAllowed } from "./mercadopago";
+import { createCheckoutPreference, mercadoPagoConfigured } from "./mercadopago";
 
 type Authed = {
   supabase: { from: (table: string) => any };
@@ -14,10 +14,11 @@ function auth(context: unknown): Authed {
   return ctx as Authed;
 }
 
-export const getPaymentOptions = createServerFn({ method: "GET" }).handler(async () => ({
-  mercadoPago: mercadoPagoConfigured(),
-  sandbox: sandboxPaymentsAllowed(),
-}));
+export const getPaymentOptions = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .handler(async () => ({
+    mercadoPago: mercadoPagoConfigured(),
+  }));
 
 export const startMercadoPagoCheckout = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])

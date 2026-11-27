@@ -1,5 +1,6 @@
 import { localAllCards, localSets } from "@/lib/catalog/local";
 import { parseTcgdexCardPricing, tcgdexCandidateIds } from "@/lib/pricing/quote";
+import { tcgdexOutboundBudget } from "@/lib/rolling-budget";
 
 export const DEFAULT_CATALOG_SETS = [
   "base1",
@@ -159,11 +160,38 @@ export async function importSeededCatalog(): Promise<{
   return { importedSets: sets.length, importedCards: cards.length };
 }
 
+export class SyncBusyError extends Error {
+  constructor() {
+    super("Sincronização já em andamento ou executada há pouco. Tente novamente em instantes.");
+    this.name = "SyncBusyError";
+  }
+}
+
+export const SYNC_MIN_INTERVAL_MS = 60_000;
+export const SYNC_MAX_LIMIT = 10;
+let syncRunning = false;
+let lastSyncStartedAt = 0;
+
 export async function syncPricesBatch(limit = 25): Promise<{
   checked: number;
   inserted: number;
 }> {
-  const safeLimit = Math.max(1, Math.min(Math.floor(limit), 40));
+  const now = Date.now();
+  if (syncRunning || now - lastSyncStartedAt < SYNC_MIN_INTERVAL_MS) throw new SyncBusyError();
+  syncRunning = true;
+  lastSyncStartedAt = now;
+  try {
+    return await runPriceSync(limit);
+  } finally {
+    syncRunning = false;
+  }
+}
+
+async function runPriceSync(limit: number): Promise<{
+  checked: number;
+  inserted: number;
+}> {
+  const safeLimit = Math.max(1, Math.min(Math.floor(limit), SYNC_MAX_LIMIT));
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
   const { data: cards, error } = await supabaseAdmin.from("cards").select("id").limit(safeLimit);
@@ -188,6 +216,7 @@ export async function syncPricesBatch(limit = 25): Promise<{
 
   for (const c of cards) {
     for (const candidate of tcgdexCandidateIds(c.id)) {
+      if (!tcgdexOutboundBudget.tryTake()) continue;
       try {
         const sourceUrl = `${TCGDEX_API}/${encodeURIComponent(candidate)}`;
         const res = await fetch(sourceUrl, {

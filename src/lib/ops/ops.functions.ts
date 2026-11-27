@@ -48,7 +48,7 @@ export const runAdminSeedCatalog = createServerFn({ method: "POST" })
 export const runAdminPriceSync = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: { limit?: number }) =>
-    z.object({ limit: z.number().int().min(1).max(40).default(25) }).parse(d ?? {}),
+    z.object({ limit: z.number().int().min(1).max(10).default(10) }).parse(d ?? {}),
   )
   .handler(async ({ data, context }) => {
     await assertAdmin(context);

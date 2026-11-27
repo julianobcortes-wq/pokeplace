@@ -2,6 +2,7 @@ import "./lib/error-capture";
 
 import { consumeLastCapturedError } from "./lib/error-capture";
 import { renderErrorPage } from "./lib/error-page";
+import { publicSupabaseConfigMissing } from "./lib/config-guard";
 
 type ServerEntry = {
   fetch: (request: Request, env: unknown, ctx: unknown) => Promise<Response> | Response;
@@ -68,7 +69,7 @@ export default {
         });
       }
       if (url.pathname === "/api/cron/sync-prices" && request.method === "POST") {
-        const { syncPricesBatch, verifyCronBearer } = await import("./lib/ops/sync-runner");
+        const { syncPricesBatch, verifyCronBearer, SyncBusyError } = await import("./lib/ops/sync-runner");
         const auth = verifyCronBearer(request);
         if (!auth.ok) {
           return new Response(JSON.stringify({ error: auth.status === 503 ? "cron not configured" : "unauthorized" }), {
@@ -77,7 +78,18 @@ export default {
           });
         }
         const limit = Number(url.searchParams.get("limit") ?? "25");
-        const result = await syncPricesBatch(Number.isFinite(limit) ? limit : 25);
+        let result: Awaited<ReturnType<typeof syncPricesBatch>>;
+        try {
+          result = await syncPricesBatch(Number.isFinite(limit) ? limit : 10);
+        } catch (error) {
+          if (error instanceof SyncBusyError) {
+            return new Response(JSON.stringify({ error: "busy" }), {
+              status: 429,
+              headers: { "content-type": "application/json; charset=utf-8", "retry-after": "60" },
+            });
+          }
+          throw error;
+        }
         return new Response(JSON.stringify({ ok: true, ...result }), {
           status: 200,
           headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
@@ -86,6 +98,12 @@ export default {
       if (url.pathname === "/api/mercadopago/webhook" && request.method === "POST") {
         const { handleMercadoPagoWebhook } = await import("./lib/payments/webhook");
         return await handleMercadoPagoWebhook(request);
+      }
+      if (process.env["NODE_ENV"] === "production" && publicSupabaseConfigMissing()) {
+        return new Response("Serviço temporariamente indisponível.", {
+          status: 503,
+          headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" },
+        });
       }
       const handler = await getServerEntry();
       const response = await handler.fetch(request, env, ctx);
