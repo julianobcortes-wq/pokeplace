@@ -62,7 +62,7 @@ export default {
         }
         const { getLaunchReadiness } = await import("./lib/ops/readiness");
         const report = await getLaunchReadiness();
-        return new Response(JSON.stringify(report), {
+        return new Response(JSON.stringify({ ok: true, ready: report.ready }), {
           status: 200,
           headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
         });

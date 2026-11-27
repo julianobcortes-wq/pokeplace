@@ -76,9 +76,8 @@ describe("Launch readiness & ops helpers", () => {
       {},
     );
     expect(authedRes.status).toBe(200);
-    const body = (await authedRes.json()) as { ok: boolean; checks?: Record<string, boolean> };
-    expect(body.ok).toBe(true);
-    expect(body.checks).toBeDefined();
+    const body = (await authedRes.json()) as Record<string, unknown>;
+    expect(body).toEqual({ ok: true, ready: expect.any(Boolean) });
   });
 
   it("creates the marketplace-media storage bucket in all-migrations.sql", () => {

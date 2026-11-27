@@ -13,6 +13,7 @@ import {
   type LocalSet,
 } from "./catalog/local";
 import type { TrendSummary } from "./pricing/series";
+import { tcgdexOutboundBudget } from "./rolling-budget";
 
 function dbConfigured() {
   return Boolean(process.env["SUPABASE_URL"] && process.env["SUPABASE_PUBLISHABLE_KEY"]);
@@ -38,6 +39,7 @@ async function enrichLocalCard(card: LocalCard): Promise<LocalCard> {
   }
   const { tcgdexCandidateIds } = await import("@/lib/pricing/quote");
   for (const candidate of tcgdexCandidateIds(card.id)) {
+    if (!tcgdexOutboundBudget.tryTake()) return card;
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 2500);
     try {
@@ -74,6 +76,7 @@ async function enrichLocalCard(card: LocalCard): Promise<LocalCard> {
       clearTimeout(timer);
     }
   }
+  cardMetaCache.set(card.id, { at: Date.now(), rarity: null, artist: null, types: null, subtypes: null });
   return card;
 }
 
@@ -202,7 +205,7 @@ const trendCache = new Map<string, { at: number; value: TrendSummary | null }>()
 const trendInFlight = new Map<string, Promise<TrendSummary | null>>();
 const TREND_CACHE_TTL = 15 * 60 * 1000;
 const MAX_TREND_IDS = 30;
-const MAX_UNCACHED_EXTERNAL_QUOTES = 16;
+const MAX_UNCACHED_EXTERNAL_QUOTES = 6;
 
 export const getTrends = createServerFn({ method: "GET" })
   .inputValidator((d: { ids: string[] }) => ({
@@ -261,6 +264,7 @@ export const getTrends = createServerFn({ method: "GET" })
         if (inflight) return inflight;
         const job = (async () => {
           try {
+            if (!tcgdexOutboundBudget.tryTake()) return null;
             const q = await quoteCard(id);
             const mult = fxRateToBrl(q.currency, fx);
             const trend = seriesToTrend(
