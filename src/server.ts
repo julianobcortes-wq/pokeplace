@@ -135,6 +135,26 @@ export default {
           }),
         );
       }
+      if (url.pathname === "/api/cron/orders-maintenance" && request.method === "POST") {
+        const { verifyCronBearer } = await import("./lib/ops/sync-runner");
+        const auth = verifyCronBearer(request);
+        if (!auth.ok) {
+          return withSecurityHeaders(
+            new Response(JSON.stringify({ error: auth.status === 503 ? "cron not configured" : "unauthorized" }), {
+              status: auth.status,
+              headers: { "content-type": "application/json; charset=utf-8" },
+            }),
+          );
+        }
+        const { runOrdersMaintenance } = await import("./lib/ops/orders-cron");
+        const result = await runOrdersMaintenance();
+        return withSecurityHeaders(
+          new Response(JSON.stringify({ ok: true, ...result }), {
+            status: 200,
+            headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+          }),
+        );
+      }
       if (url.pathname === "/api/mercadopago/webhook" && request.method === "POST") {
         const { handleMercadoPagoWebhook } = await import("./lib/payments/webhook");
         return withSecurityHeaders(await handleMercadoPagoWebhook(request));

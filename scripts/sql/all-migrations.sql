@@ -2329,5 +2329,149 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
 $$;
 GRANT EXECUTE ON FUNCTION public.get_wishlist_matches() TO authenticated;
 
+-- =====================================================================
+-- 0016_mp_reconciliation_refunds_cron.sql
+-- Phase 3: Payment webhook idempotency, Mercado Pago refunds, reconciliation,
+-- and pre-confirmation delivery warnings
+-- =====================================================================
+
+ALTER TABLE public.payments
+  ADD COLUMN IF NOT EXISTS external_id text;
+
+CREATE TABLE IF NOT EXISTS public.payment_webhook_events (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  provider text NOT NULL,
+  event_key text NOT NULL,
+  external_payment_id text,
+  order_id uuid REFERENCES public.orders(id),
+  status text,
+  received_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (provider, event_key)
+);
+GRANT ALL ON public.payment_webhook_events TO service_role;
+ALTER TABLE public.payment_webhook_events ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS pwe_admin_read ON public.payment_webhook_events;
+CREATE POLICY pwe_admin_read ON public.payment_webhook_events
+  FOR SELECT TO authenticated
+  USING (public.has_role(auth.uid(), 'admin'));
+
+CREATE TABLE IF NOT EXISTS public.payment_refunds (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id uuid NOT NULL REFERENCES public.orders(id) ON DELETE CASCADE,
+  external_payment_id text,
+  external_refund_id text,
+  amount numeric(12,2) NOT NULL CHECK (amount > 0),
+  reason text NOT NULL,
+  status text NOT NULL DEFAULT 'processed',
+  created_by uuid,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+GRANT SELECT ON public.payment_refunds TO authenticated;
+GRANT ALL ON public.payment_refunds TO service_role;
+ALTER TABLE public.payment_refunds ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS payment_refunds_read ON public.payment_refunds;
+CREATE POLICY payment_refunds_read ON public.payment_refunds
+  FOR SELECT TO authenticated
+  USING (
+    public.has_role(auth.uid(), 'admin')
+    OR EXISTS (SELECT 1 FROM public.orders o WHERE o.id = order_id AND o.buyer_id = auth.uid())
+  );
+
+CREATE OR REPLACE FUNCTION public.record_payment_refund(
+  _order_id uuid,
+  _amount numeric,
+  _reason text,
+  _external_refund_id text DEFAULT NULL,
+  _external_payment_id text DEFAULT NULL,
+  _actor uuid DEFAULT NULL
+) RETURNS uuid
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_order record;
+  v_total numeric;
+  v_refunded_total numeric;
+  v_id uuid;
+BEGIN
+  SELECT * INTO v_order FROM public.orders WHERE id = _order_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Pedido não encontrado'; END IF;
+  IF _amount IS NULL OR _amount <= 0 THEN RAISE EXCEPTION 'Valor de estorno inválido'; END IF;
+
+  INSERT INTO public.payment_refunds (order_id, external_payment_id, external_refund_id, amount, reason, created_by)
+  VALUES (_order_id, _external_payment_id, _external_refund_id, round(_amount, 2), coalesce(nullif(trim(_reason), ''), 'Estorno administrativo'), _actor)
+  RETURNING id INTO v_id;
+
+  SELECT coalesce(sum(amount), 0) INTO v_refunded_total FROM public.payment_refunds WHERE order_id = _order_id;
+  v_total := coalesce(v_order.subtotal, 0) + coalesce(v_order.shipping_total, 0);
+
+  IF v_refunded_total >= v_total THEN
+    UPDATE public.payments SET status = 'refunded', updated_at = now() WHERE order_id = _order_id;
+    UPDATE public.orders SET status = 'cancelled', updated_at = now() WHERE id = _order_id AND status NOT IN ('cancelled');
+  END IF;
+
+  PERFORM public.notify(v_order.buyer_id, 'Estorno processado', 'Um estorno foi registrado para o pedido #' || left(_order_id::text, 8) || '.', '/pedidos/' || _order_id::text);
+  RETURN v_id;
+END $$;
+REVOKE ALL ON FUNCTION public.record_payment_refund(uuid, numeric, text, text, text, uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.record_payment_refund(uuid, numeric, text, text, text, uuid) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.reconcile_payment_status(
+  _order_id uuid,
+  _provider text,
+  _external_id text,
+  _provider_status text
+) RETURNS text
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_order record;
+BEGIN
+  SELECT * INTO v_order FROM public.orders WHERE id = _order_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Pedido não encontrado'; END IF;
+
+  IF _provider_status = 'approved' THEN
+    IF v_order.status = 'awaiting_payment' THEN
+      PERFORM public.confirm_live_payment(_order_id, _provider, _external_id);
+      RETURN 'confirmed';
+    END IF;
+    RETURN 'already_paid';
+  ELSIF _provider_status IN ('refunded', 'charged_back') THEN
+    UPDATE public.payments SET status = _provider_status, external_id = coalesce(_external_id, external_id), updated_at = now() WHERE order_id = _order_id;
+    IF _provider_status = 'charged_back' THEN
+      PERFORM public.notify(v_order.buyer_id, 'Contestação de pagamento', 'Recebemos notificação de chargeback no pedido #' || left(_order_id::text, 8) || '.', '/pedidos/' || _order_id::text);
+    END IF;
+    RETURN _provider_status;
+  ELSIF _provider_status IN ('cancelled', 'rejected') THEN
+    UPDATE public.payments SET status = 'failed', external_id = coalesce(_external_id, external_id), updated_at = now() WHERE order_id = _order_id;
+    IF v_order.status = 'awaiting_payment' THEN
+      UPDATE public.orders SET status = 'cancelled', updated_at = now() WHERE id = _order_id;
+      PERFORM public.release_order_stock(_order_id);
+    END IF;
+    RETURN 'cancelled';
+  END IF;
+
+  UPDATE public.payments SET external_id = coalesce(_external_id, external_id), updated_at = now() WHERE order_id = _order_id;
+  RETURN 'pending';
+END $$;
+REVOKE ALL ON FUNCTION public.reconcile_payment_status(uuid, text, text, text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.reconcile_payment_status(uuid, text, text, text) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.list_orders_needing_delivery_warning()
+RETURNS TABLE(order_id uuid, buyer_id uuid, shipped_at timestamptz)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT DISTINCT oi.order_id, o.buyer_id, min(oi.shipped_at) AS shipped_at
+  FROM public.order_items oi
+  JOIN public.orders o ON o.id = oi.order_id
+  WHERE oi.status = 'shipped'
+    AND oi.shipped_at IS NOT NULL
+    AND oi.shipped_at <= now() - interval '5 days'
+    AND oi.shipped_at > now() - interval '7 days'
+    AND NOT EXISTS (
+      SELECT 1 FROM public.disputes d WHERE d.order_item_id = oi.id AND d.status NOT LIKE 'resolved%'
+    )
+  GROUP BY oi.order_id, o.buyer_id;
+$$;
+REVOKE ALL ON FUNCTION public.list_orders_needing_delivery_warning() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.list_orders_needing_delivery_warning() TO service_role;
+
+
 
 

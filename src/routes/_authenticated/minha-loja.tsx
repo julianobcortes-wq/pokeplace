@@ -21,6 +21,8 @@ import { updateOwnListing } from "@/lib/guard.functions";
 import { BRAND, CONDITIONS, FINISHES, LANGUAGES, SELLER_STATUS, money } from "@/lib/format";
 import { photoSlotLabel, validateGrading } from "@/lib/marketplace/grading";
 import { shippingSlaStatus } from "@/lib/marketplace/rules";
+import { getCarrierTrackingUrl, SHIPPING_CARRIERS } from "@/lib/marketplace/shipping";
+import { notifyOrderShipped } from "@/lib/payments/functions";
 
 export const Route = createFileRoute("/_authenticated/minha-loja")({
   head: () => ({
@@ -245,7 +247,7 @@ function MyStore() {
                             </p>
                           );
                         })()}
-                        <ShipmentControl item={s} onDone={refresh} />
+                        <ShipmentControl item={s} storeName={seller.store_name} onDone={refresh} />
                         {s.status === "delivered" && (
                           <div className="mt-2">
                             <BuyerReviewForm orderId={s.order_id} sellerId={seller.id} buyerLabel={s.orders?.ship_name ?? undefined} />
@@ -555,43 +557,132 @@ function NewListing({ sellerId, onDone }: { sellerId: string; onDone: () => void
   );
 }
 
+function printShippingLabel(opts: {
+  storeName: string;
+  orderId: string;
+  cardName: string;
+  quantity: number;
+  shipName: string;
+  shipAddress: string;
+  shipCity: string;
+  shipState: string;
+  shipZip: string;
+  carrier?: string | null;
+  tracking?: string | null;
+}) {
+  const esc = (s: string) =>
+    s.replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch] ?? ch));
+  const win = window.open("", "_blank", "width=520,height=640");
+  if (!win) {
+    toast.error("Permita pop-ups para imprimir a etiqueta de envio.");
+    return;
+  }
+  win.document.write(`<!doctype html><html><head><title>Etiqueta #${esc(opts.orderId.slice(0, 8))}</title>
+  <style>body{font-family:system-ui,sans-serif;padding:24px;color:#111} .box{border:2px solid #111;border-radius:10px;padding:18px;max-width:420px} h1{margin:0 0 8px;font-size:18px} .meta{font-size:12px;color:#555;margin-bottom:12px} .dest{border-top:1px dashed #999;padding-top:12px;margin-top:12px} .big{font-size:16px;font-weight:700} .btn{margin-top:16px;padding:8px 16px;cursor:pointer} @media print{.btn{display:none}}</style></head>
+  <body><div class="box">
+  <h1>PokePlace — Etiqueta de Envio</h1>
+  <div class="meta">Pedido #${esc(opts.orderId.slice(0, 8))} · Remetente: <b>${esc(opts.storeName)}</b></div>
+  <div><strong>Conteúdo:</strong> ${opts.quantity}x ${esc(opts.cardName)}</div>
+  ${opts.carrier || opts.tracking ? `<div style="margin-top:6px"><strong>Envio:</strong> ${esc(opts.carrier ?? "")} ${esc(opts.tracking ?? "")}</div>` : ""}
+  <div class="dest">
+    <div style="font-size:11px;text-transform:uppercase;color:#666">Destinatário</div>
+    <div class="big">${esc(opts.shipName)}</div>
+    <div>${esc(opts.shipAddress)}</div>
+    <div>${esc(opts.shipCity)} / ${esc(opts.shipState)}</div>
+    <div class="big" style="margin-top:4px">CEP: ${esc(opts.shipZip)}</div>
+  </div>
+  <button class="btn" onclick="window.print()">Imprimir etiqueta</button>
+  </div></body></html>`);
+  win.document.close();
+}
+
 function ShipmentControl({
   item,
+  storeName,
   onDone,
 }: {
-  item: { id: string; status: string; tracking_code: string | null; shipping_carrier: string | null };
+  item: {
+    id: string;
+    order_id: string;
+    quantity: number;
+    status: string;
+    tracking_code: string | null;
+    shipping_carrier: string | null;
+    cards?: { name: string; number: string } | null;
+    orders?: { ship_name?: string | null; ship_address?: string | null; ship_city?: string | null; ship_state?: string | null; ship_zip?: string | null } | null;
+  };
+  storeName: string;
   onDone: () => void;
 }) {
-  const [carrier, setCarrier] = useState("");
+  const [carrier, setCarrier] = useState("Correios");
   const [tracking, setTracking] = useState("");
   const [busy, setBusy] = useState(false);
+
+  const openLabel = () => {
+    printShippingLabel({
+      storeName,
+      orderId: item.order_id,
+      cardName: item.cards ? `${item.cards.name} #${item.cards.number}` : "Carta Pokémon",
+      quantity: item.quantity,
+      shipName: item.orders?.ship_name ?? "Destinatário",
+      shipAddress: item.orders?.ship_address ?? "",
+      shipCity: item.orders?.ship_city ?? "",
+      shipState: item.orders?.ship_state ?? "",
+      shipZip: item.orders?.ship_zip ?? "",
+      carrier: item.shipping_carrier ?? carrier,
+      tracking: item.tracking_code ?? tracking,
+    });
+  };
+
   const send = async () => {
     setBusy(true);
     const { error } = await supabase.rpc("mark_item_shipped", { _item_id: item.id, _carrier: carrier, _tracking: tracking });
     setBusy(false);
     if (error) toast.error(error.message);
     else {
-      toast.success("Envio registrado");
+      toast.success("Envio registrado e comprador avisado");
+      void notifyOrderShipped({ data: { orderItemId: item.id, carrier, trackingCode: tracking } }).catch(() => {});
       onDone();
     }
   };
-  if (item.status !== "pending")
+
+  if (item.status !== "pending") {
+    const trackUrl = getCarrierTrackingUrl(item.shipping_carrier, item.tracking_code);
     return (
-      <span className="text-xs">
-        {item.status === "delivered" ? "Recebimento confirmado" : item.status === "cancelled" ? "Cancelado" : "Enviado"}
-        <br />
-        {item.shipping_carrier} {item.tracking_code}
-      </span>
+      <div className="space-y-1 text-xs">
+        <p className="font-medium">
+          {item.status === "delivered" ? "Recebimento confirmado" : item.status === "cancelled" ? "Cancelado" : "Enviado"}
+        </p>
+        {item.tracking_code && (
+          <p className="text-muted-foreground">
+            {item.shipping_carrier} ·{" "}
+            {trackUrl ? (
+              <a href={trackUrl} target="_blank" rel="noopener noreferrer" className="num text-primary underline">
+                {item.tracking_code}
+              </a>
+            ) : (
+              <span className="num">{item.tracking_code}</span>
+            )}
+          </p>
+        )}
+        <Button type="button" size="sm" variant="ghost" className="h-auto px-0 text-[11px]" onClick={openLabel}>
+          Imprimir etiqueta
+        </Button>
+      </div>
     );
+  }
   return (
-    <div className="min-w-40 space-y-1">
-      <input
+    <div className="min-w-44 space-y-1.5">
+      <select
         aria-label="Transportadora"
-        placeholder="Transportadora"
         value={carrier}
         onChange={(e) => setCarrier(e.target.value)}
         className="w-full rounded border border-input bg-card px-2 py-1 text-xs"
-      />
+      >
+        {SHIPPING_CARRIERS.map((c) => (
+          <option key={c.id} value={c.name}>{c.name}</option>
+        ))}
+      </select>
       <input
         aria-label="Código de rastreio"
         placeholder="Código de rastreio"
@@ -599,9 +690,14 @@ function ShipmentControl({
         onChange={(e) => setTracking(e.target.value)}
         className="w-full rounded border border-input bg-card px-2 py-1 text-xs"
       />
-      <Button size="sm" disabled={busy || !carrier.trim() || !tracking.trim()} onClick={send}>
-        Registrar envio
-      </Button>
+      <div className="flex flex-wrap gap-1.5">
+        <Button size="sm" disabled={busy || !carrier.trim() || !tracking.trim()} onClick={send}>
+          Registrar envio
+        </Button>
+        <Button type="button" size="sm" variant="outline" onClick={openLabel}>
+          Etiqueta
+        </Button>
+      </div>
     </div>
   );
 }

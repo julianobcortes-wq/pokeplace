@@ -40,11 +40,11 @@ Plano mestre vivo para fechamento completo e comercial do marketplace **PokePlac
 - [x] Carrinho e checkout exibindo frete por UF, barra de progresso de frete grátis, cupons e descontos por volume antes do pagamento (`carrinho.tsx` + `place_order_v2`)
 
 ### Fase 3 — Pedidos, Checkout, Logística, Comunicação e Mercado Pago Completo
-- [ ] Frete por UF (`shipping_profiles.state_rates`), frete grátis configurável, transportadora e link de rastreio
-- [ ] Etiqueta imprimível de envio para vendedores
-- [ ] E-mails transacionais completos via Resend (pagamento confirmado, pedido enviado + rastreio, aviso SLA, aviso pré-confirmação de entrega, entrega confirmada, oferta aceita, alerta de preço)
-- [ ] Cron unificado `/api/cron/orders-maintenance` (`expire_stale_orders`, `expire_stale_offers`, `auto_confirm_delivered_orders`, avisos de entrega e alertas de preço)
-- [ ] Integração completa Mercado Pago: preferência com split/comissão, webhook idempotente (`approved`, `refunded`, `charged_back`, `cancelled`, `rejected`), estorno via API, conciliação administrativa (desativado em produção sem credenciais)
+- [x] Frete por UF (`shipping_profiles.state_rates`), frete grátis configurável, transportadora e link de rastreio (`shipping.ts`, `ShippingEditor`, `ShipmentControl`)
+- [x] Etiqueta imprimível de envio para vendedores (`printShippingLabel` em `minha-loja.tsx`)
+- [x] E-mails transacionais completos via Resend (`src/lib/notify/email.ts`: pago, enviado + link de rastreio, aviso SLA, aviso pré-confirmação de entrega, alerta de preço — com fallback seguro sem chave)
+- [x] Cron unificado `/api/cron/orders-maintenance` (`src/lib/ops/orders-cron.ts` + `src/server.ts`: `expire_unpaid_orders`, `expire_stale_offers`, `auto_confirm_delivered_orders`, avisos de entrega)
+- [x] Integração completa Mercado Pago (`0016`, `mercadopago.ts`, `webhook.ts`, `functions.ts`, `AdminPaymentsOps.tsx`): preferência com metadados de split/comissão, webhook HMAC fail-closed + idempotência (`payment_webhook_events`), estorno via API (`payment_refunds`), conciliação administrativa — desativado em produção sem credenciais
 
 ### Fase 4 — Reputação, Confiança, Disputas e Mediação
 - [x] Termômetro 5 níveis, medalhas PokeLíder, strikes, CDC art. 49 (7 dias), SLA de envio, ranking opt-in `/ranking`

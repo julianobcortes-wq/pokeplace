@@ -10,6 +10,12 @@ import { safeNotificationHref } from "@/lib/safe-url";
 import { isSupabaseConfigured } from "@/lib/runtime-config";
 import { getPaymentOptions } from "@/lib/payments/functions";
 import { processPayout, requestSellerPayout, resolveDispute, reviewReport, setPlatformSetting } from "@/lib/guard.functions";
+import {
+  BRAZIL_REGIONS,
+  BRAZILIAN_UFS,
+  sanitizeStateRates,
+  SHIPPING_CARRIERS,
+} from "@/lib/marketplace/shipping";
 
 const f = "w-full rounded-md border border-input bg-background px-3 py-2 text-sm";
 const box = "rounded-md bg-card p-5 shadow-sm";
@@ -263,25 +269,156 @@ export function OpenDispute({ itemId, name }: { itemId: string; name: string }) 
 /* ---------- Vendedor ---------- */
 export function ShippingEditor({ sellerId }: { sellerId: string }) {
   const qc = useQueryClient();
-  const { data } = useQuery({ queryKey: ["shipping", sellerId], queryFn: async () => (await supabase.from("shipping_profiles").select("*").eq("seller_id", sellerId).maybeSingle()).data });
-  const [v, setV] = useState<{ origin_zip: string; flat_fee: string; free_over: string; pickup: boolean; days: string } | null>(null);
-  const cur = v ?? { origin_zip: data?.origin_zip ?? "", flat_fee: String(data?.flat_fee ?? 0), free_over: data?.free_over ? String(data.free_over) : "", pickup: data?.pickup_available ?? false, days: String(data?.handling_days ?? 2) };
-  const save = async () => {
-    const row = { seller_id: sellerId, origin_zip: cur.origin_zip || null, flat_fee: Number(cur.flat_fee) || 0, free_over: cur.free_over ? Number(cur.free_over) : null, pickup_available: cur.pickup, handling_days: Number(cur.days) || 0, updated_at: new Date().toISOString() };
-    const { error } = data ? await supabase.from("shipping_profiles").update(row).eq("seller_id", sellerId) : await supabase.from("shipping_profiles").insert(row);
-    if (err(error, "Frete salvo")) { setV(null); qc.invalidateQueries({ queryKey: ["shipping", sellerId] }); }
+  const { data } = useQuery({
+    queryKey: ["shipping", sellerId],
+    queryFn: async () => (await supabase.from("shipping_profiles").select("*").eq("seller_id", sellerId).maybeSingle()).data,
+  });
+  const ext = data as unknown as { state_rates?: Record<string, number>; preferred_carrier?: string } | null;
+  const [v, setV] = useState<{
+    origin_zip: string;
+    flat_fee: string;
+    free_over: string;
+    pickup: boolean;
+    days: string;
+    preferred_carrier: string;
+    state_rates: Record<string, number>;
+  } | null>(null);
+  const [ufPick, setUfPick] = useState<string>("SP");
+  const [ufFee, setUfFee] = useState<string>("");
+
+  const cur = v ?? {
+    origin_zip: data?.origin_zip ?? "",
+    flat_fee: String(data?.flat_fee ?? 0),
+    free_over: data?.free_over ? String(data.free_over) : "",
+    pickup: data?.pickup_available ?? false,
+    days: String(data?.handling_days ?? 2),
+    preferred_carrier: ext?.preferred_carrier ?? "correios",
+    state_rates: sanitizeStateRates(ext?.state_rates),
   };
-  const set = (k: string, val: string | boolean) => setV({ ...cur, [k]: val });
+
+  const set = <K extends keyof typeof cur>(k: K, val: (typeof cur)[K]) => setV({ ...cur, [k]: val });
+
+  const addUfRate = () => {
+    const n = Number(ufFee.replace(",", "."));
+    if (!Number.isFinite(n) || n < 0 || n > 500) {
+      toast.error("Informe um valor de frete entre R$ 0 e R$ 500");
+      return;
+    }
+    set("state_rates", { ...cur.state_rates, [ufPick]: Math.round(n * 100) / 100 });
+    setUfFee("");
+  };
+
+  const applyRegionRate = (region: string) => {
+    const n = Number(ufFee.replace(",", "."));
+    if (!Number.isFinite(n) || n < 0 || n > 500) {
+      toast.error("Informe o valor R$ antes de aplicar para a região");
+      return;
+    }
+    const ufs = BRAZIL_REGIONS[region] ?? [];
+    const next = { ...cur.state_rates };
+    for (const u of ufs) next[u] = Math.round(n * 100) / 100;
+    set("state_rates", next);
+    setUfFee("");
+  };
+
+  const save = async () => {
+    const row = {
+      seller_id: sellerId,
+      origin_zip: cur.origin_zip || null,
+      flat_fee: Number(cur.flat_fee) || 0,
+      free_over: cur.free_over ? Number(cur.free_over) : null,
+      pickup_available: cur.pickup,
+      handling_days: Number(cur.days) || 0,
+      state_rates: sanitizeStateRates(cur.state_rates),
+      preferred_carrier: cur.preferred_carrier,
+      updated_at: new Date().toISOString(),
+    };
+    const { error } = data
+      ? await (supabase.from("shipping_profiles") as unknown as { update: (r: unknown) => { eq: (c: string, v: string) => Promise<{ error: { message: string } | null }> } })
+          .update(row)
+          .eq("seller_id", sellerId)
+      : await (supabase.from("shipping_profiles") as unknown as { insert: (r: unknown) => Promise<{ error: { message: string } | null }> })
+          .insert(row);
+    if (err(error, "Frete salvo")) {
+      setV(null);
+      qc.invalidateQueries({ queryKey: ["shipping", sellerId] });
+    }
+  };
+
+  const rateEntries = Object.entries(cur.state_rates).sort(([a], [b]) => a.localeCompare(b));
+
   return (
     <section className={box}>
-      <h2 className="text-lg font-semibold">Frete da loja</h2>
-      <div className="mt-3 grid gap-3 md:grid-cols-4">
+      <h2 className="text-lg font-semibold">Frete da loja (Nacional e por UF)</h2>
+      <div className="mt-3 grid gap-3 md:grid-cols-5">
         <label className="text-sm">CEP de origem<input className={f} value={cur.origin_zip} onChange={(e) => set("origin_zip", e.target.value)} /></label>
-        <label className="text-sm">Frete fixo (R$)<input type="number" min={0} step="0.01" className={f} value={cur.flat_fee} onChange={(e) => set("flat_fee", e.target.value)} /></label>
+        <label className="text-sm">Frete padrão (R$)<input type="number" min={0} step="0.01" className={f} value={cur.flat_fee} onChange={(e) => set("flat_fee", e.target.value)} /></label>
         <label className="text-sm">Grátis acima de (R$)<input type="number" min={0} step="0.01" className={f} value={cur.free_over} onChange={(e) => set("free_over", e.target.value)} /></label>
-        <label className="text-sm">Prazo de postagem (dias úteis)<input type="number" min={0} max={30} className={f} value={cur.days} onChange={(e) => set("days", e.target.value)} /></label>
+        <label className="text-sm">Prazo de postagem (dias)<input type="number" min={0} max={30} className={f} value={cur.days} onChange={(e) => set("days", e.target.value)} /></label>
+        <label className="text-sm">
+          Transportadora padrão
+          <select className={f} value={cur.preferred_carrier} onChange={(e) => set("preferred_carrier", e.target.value)}>
+            {SHIPPING_CARRIERS.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+        </label>
       </div>
-      <label className="mt-3 flex items-center gap-2 text-sm"><input type="checkbox" checked={cur.pickup} onChange={(e) => set("pickup", e.target.checked)} /> Aceito retirada em mão</label>
+
+      <div className="mt-4 rounded-xl border border-border bg-muted/30 p-3">
+        <p className="text-xs font-semibold">Regras de frete por estado (UF)</p>
+        <p className="text-[11px] text-muted-foreground">
+          Opcional: defina valores diferenciados por UF ou região. Estados não configurados usam o frete padrão acima.
+        </p>
+        <div className="mt-2 flex flex-wrap items-end gap-2">
+          <label className="text-xs">
+            UF
+            <select className="ml-1 rounded-md border border-input bg-background px-2 py-1 text-xs" value={ufPick} onChange={(e) => setUfPick(e.target.value)}>
+              {BRAZILIAN_UFS.map((u) => <option key={u} value={u}>{u}</option>)}
+            </select>
+          </label>
+          <input
+            aria-label="Valor do frete para UF"
+            inputMode="decimal"
+            placeholder="Ex.: 14,90"
+            value={ufFee}
+            onChange={(e) => setUfFee(e.target.value)}
+            className="num w-24 rounded-md border border-input bg-background px-2 py-1 text-xs"
+          />
+          <Button type="button" size="sm" variant="secondary" onClick={addUfRate}>Definir UF</Button>
+          {Object.keys(BRAZIL_REGIONS).map((reg) => (
+            <Button key={reg} type="button" size="sm" variant="outline" onClick={() => applyRegionRate(reg)}>
+              Aplicar {reg}
+            </Button>
+          ))}
+        </div>
+        {rateEntries.length > 0 && (
+          <div className="mt-2.5 flex flex-wrap gap-1.5">
+            {rateEntries.map(([uf, fee]) => (
+              <span key={uf} className="inline-flex items-center gap-1 rounded-full bg-card px-2.5 py-0.5 text-xs shadow-sm">
+                <b>{uf}</b> <span className="num">{money(fee)}</span>
+                <button
+                  type="button"
+                  aria-label={`Remover regra ${uf}`}
+                  className="ml-0.5 text-muted-foreground hover:text-destructive"
+                  onClick={() => {
+                    const next = { ...cur.state_rates };
+                    delete next[uf];
+                    set("state_rates", next);
+                  }}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <label className="mt-3 flex items-center gap-2 text-sm">
+        <input type="checkbox" checked={cur.pickup} onChange={(e) => set("pickup", e.target.checked)} />
+        Aceito retirada em mão
+      </label>
       <Button className="mt-3" onClick={save}>Salvar frete</Button>
     </section>
   );

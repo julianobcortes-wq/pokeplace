@@ -1,4 +1,5 @@
 import { AdminOps } from "@/components/ops";
+import { AdminPaymentsOps } from "@/components/AdminPaymentsOps";
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
@@ -106,6 +107,7 @@ function Admin() {
             ))}
           </div>
         </section>
+        <AdminPaymentsOps />
         <AdminOps />
         <SupportInbox admin />
       </main>
