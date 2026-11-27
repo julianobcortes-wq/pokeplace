@@ -1067,3 +1067,717 @@ end $$;
 
 revoke all on function public.confirm_live_payment(uuid, text, text) from public, anon, authenticated;
 grant execute on function public.confirm_live_payment(uuid, text, text) to service_role;
+
+
+-- ===== 0013_ml_marketplace_rules_and_rankings.sql =====
+-- Mercado Livre-style marketplace rules, seller thermometer & medals, automatic strikes,
+-- shipping SLA (ship_by), 7-day CDC regret/returns, 14-day auto-delivery confirmation,
+-- and LGPD-safe opt-in buyer reputation & rankings.
+
+-- 1. Platform settings defaults (idempotent)
+INSERT INTO public.platform_settings (key, value) VALUES
+  ('auto_confirm_delivery_days', '14'::jsonb),
+  ('max_cancel_rate_pct', '5'::jsonb),
+  ('max_claim_rate_pct', '5'::jsonb),
+  ('regret_window_days', '7'::jsonb)
+ON CONFLICT (key) DO NOTHING;
+
+-- 2. Shipping SLA deadline (ship_by) & seller strike review marker
+ALTER TABLE public.order_items ADD COLUMN IF NOT EXISTS ship_by timestamptz;
+ALTER TABLE public.sellers ADD COLUMN IF NOT EXISTS strike_cleared_at timestamptz;
+
+-- Ensure mark_item_shipped records shipped_at for SLA calculation & 14-day auto-confirmation
+CREATE OR REPLACE FUNCTION public.mark_item_shipped(_item_id uuid, _carrier text, _tracking text)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF length(trim(coalesce(_carrier, ''))) NOT BETWEEN 2 AND 80
+     OR length(trim(coalesce(_tracking, ''))) NOT BETWEEN 3 AND 120 THEN
+    RAISE EXCEPTION 'Informe transportadora e código de rastreio';
+  END IF;
+
+  UPDATE public.order_items
+     SET status = 'shipped',
+         shipping_carrier = trim(_carrier),
+         tracking_code = trim(_tracking),
+         shipped_at = coalesce(shipped_at, now())
+   WHERE id = _item_id
+     AND status = 'pending'
+     AND public.owns_seller(seller_id);
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Venda indisponível para envio';
+  END IF;
+END $$;
+GRANT EXECUTE ON FUNCTION public.mark_item_shipped(uuid, text, text) TO authenticated;
+
+-- Populate ship_by from seller shipping_profiles.handling_days when live payment confirms
+CREATE OR REPLACE FUNCTION public.confirm_live_payment(_order_id uuid, _provider text, _external_id text DEFAULT NULL)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF coalesce(current_setting('request.jwt.claim.role', true), '') <> 'service_role'
+     AND NOT public.has_role(auth.uid(), 'admin') THEN
+    IF current_user NOT IN ('service_role', 'postgres', 'supabase_admin') THEN
+      RAISE EXCEPTION 'Acesso negado';
+    END IF;
+  END IF;
+
+  UPDATE public.orders
+     SET status = 'paid', expires_at = NULL
+   WHERE id = _order_id AND status = 'awaiting_payment';
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Pedido não encontrado ou já processado';
+  END IF;
+
+  UPDATE public.order_items oi
+     SET ship_by = now() + make_interval(days => COALESCE(
+       (SELECT sp.handling_days FROM public.shipping_profiles sp WHERE sp.seller_id = oi.seller_id),
+       2
+     ))
+   WHERE oi.order_id = _order_id
+     AND oi.status = 'pending'
+     AND oi.ship_by IS NULL;
+
+  UPDATE public.payments
+     SET status = 'succeeded',
+         provider = coalesce(nullif(_provider, ''), provider),
+         environment = 'live'
+   WHERE order_id = _order_id;
+
+  IF NOT FOUND THEN
+    INSERT INTO public.payments (order_id, provider, environment, status, amount, currency)
+    SELECT o.id, coalesce(nullif(_provider, ''), 'mercadopago'), 'live', 'succeeded',
+           o.subtotal + coalesce(o.shipping_total, 0), 'BRL'
+      FROM public.orders o WHERE o.id = _order_id;
+  END IF;
+END $$;
+REVOKE ALL ON FUNCTION public.confirm_live_payment(uuid, text, text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.confirm_live_payment(uuid, text, text) TO service_role;
+
+-- 3. 7-day CDC right of regret (Art. 49) & return shipment tracking on disputes
+ALTER TABLE public.disputes DROP CONSTRAINT IF EXISTS disputes_reason_check;
+ALTER TABLE public.disputes
+  ADD CONSTRAINT disputes_reason_check
+  CHECK (reason IN ('not_received', 'not_as_described', 'damaged', 'regret_7d', 'other'));
+
+ALTER TABLE public.disputes
+  ADD COLUMN IF NOT EXISTS return_carrier text,
+  ADD COLUMN IF NOT EXISTS return_tracking_code text,
+  ADD COLUMN IF NOT EXISTS return_submitted_at timestamptz;
+
+CREATE OR REPLACE FUNCTION public.open_dispute(_item_id uuid, _reason text, _description text)
+RETURNS uuid
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  it record;
+  v_id uuid;
+  v_days int;
+  v_regret_days int;
+  v_order record;
+BEGIN
+  SELECT * INTO it FROM public.order_items WHERE id = _item_id;
+  IF NOT FOUND OR NOT public.is_order_buyer(it.order_id) THEN
+    RAISE EXCEPTION 'Somente o comprador pode abrir um problema';
+  END IF;
+  SELECT * INTO v_order FROM public.orders WHERE id = it.order_id;
+  IF v_order.status NOT IN ('paid', 'shipped', 'delivered') THEN
+    RAISE EXCEPTION 'Pedido sem pagamento confirmado';
+  END IF;
+  IF it.status = 'cancelled' THEN
+    RAISE EXCEPTION 'Item cancelado';
+  END IF;
+
+  IF _reason = 'regret_7d' THEN
+    SELECT COALESCE((value #>> '{}')::int, 7) INTO v_regret_days FROM public.platform_settings WHERE key = 'regret_window_days';
+    IF it.status <> 'delivered' OR it.delivered_at IS NULL THEN
+      RAISE EXCEPTION 'O direito de arrependimento (CDC Art. 49) pode ser solicitado após a entrega do pedido.';
+    END IF;
+    IF it.delivered_at < now() - make_interval(days => COALESCE(v_regret_days, 7)) THEN
+      RAISE EXCEPTION 'O prazo legal de arrependimento (% dias após a entrega) foi encerrado.', COALESCE(v_regret_days, 7);
+    END IF;
+  ELSE
+    SELECT COALESCE((value #>> '{}')::int, 30) INTO v_days FROM public.platform_settings WHERE key = 'dispute_window_days';
+    IF it.delivered_at IS NOT NULL AND it.delivered_at < now() - make_interval(days => COALESCE(v_days, 30)) THEN
+      RAISE EXCEPTION 'Prazo para abrir problema encerrado';
+    END IF;
+    IF it.status = 'pending' AND _reason = 'not_received' THEN
+      RAISE EXCEPTION 'O item ainda não foi enviado; você pode cancelar o pedido';
+    END IF;
+  END IF;
+
+  INSERT INTO public.disputes (order_item_id, order_id, buyer_id, seller_id, reason, description)
+  VALUES (_item_id, it.order_id, auth.uid(), it.seller_id, _reason, trim(_description))
+  RETURNING id INTO v_id;
+
+  INSERT INTO public.dispute_messages (dispute_id, sender_id, body)
+  VALUES (v_id, auth.uid(), trim(_description));
+
+  PERFORM public.notify(
+    (SELECT user_id FROM public.sellers WHERE id = it.seller_id),
+    CASE WHEN _reason = 'regret_7d' THEN 'Solicitação de devolução (7 dias CDC)' ELSE 'Problema aberto em um pedido' END,
+    'Responda em até 3 dias.',
+    '/minha-loja'
+  );
+  RETURN v_id;
+END $$;
+GRANT EXECUTE ON FUNCTION public.open_dispute(uuid, text, text) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.submit_dispute_return(_dispute_id uuid, _carrier text, _tracking text)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE d record;
+BEGIN
+  SELECT * INTO d FROM public.disputes WHERE id = _dispute_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Problema não encontrado'; END IF;
+  IF d.buyer_id <> auth.uid() THEN RAISE EXCEPTION 'Somente o comprador pode informar o rastreio da devolução'; END IF;
+  IF d.status LIKE 'resolved%' THEN RAISE EXCEPTION 'Problema já resolvido'; END IF;
+  IF length(trim(coalesce(_carrier, ''))) NOT BETWEEN 2 AND 80
+     OR length(trim(coalesce(_tracking, ''))) NOT BETWEEN 3 AND 120 THEN
+    RAISE EXCEPTION 'Informe a transportadora e o código de rastreio da devolução';
+  END IF;
+
+  UPDATE public.disputes
+     SET return_carrier = trim(_carrier),
+         return_tracking_code = trim(_tracking),
+         return_submitted_at = now()
+   WHERE id = _dispute_id;
+
+  INSERT INTO public.dispute_messages (dispute_id, sender_id, body)
+  VALUES (_dispute_id, auth.uid(), format('Devolução postada: %s · Rastreio %s', trim(_carrier), trim(_tracking)));
+
+  PERFORM public.notify(
+    (SELECT user_id FROM public.sellers WHERE id = d.seller_id),
+    'Devolução postada pelo comprador',
+    format('%s · %s', trim(_carrier), trim(_tracking)),
+    '/minha-loja'
+  );
+END $$;
+GRANT EXECUTE ON FUNCTION public.submit_dispute_return(uuid, text, text) TO authenticated;
+
+-- 4. Auto-confirm delivery after N days (default 14) with no open dispute
+CREATE OR REPLACE FUNCTION public.auto_confirm_delivered_orders(_days int DEFAULT NULL)
+RETURNS int
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_days int;
+  v_count int := 0;
+  rec record;
+BEGIN
+  IF coalesce(current_setting('request.jwt.claim.role', true), '') <> 'service_role'
+     AND NOT public.has_role(auth.uid(), 'admin')
+     AND current_user NOT IN ('service_role', 'postgres', 'supabase_admin') THEN
+    RAISE EXCEPTION 'Acesso negado';
+  END IF;
+
+  SELECT COALESCE(_days, (SELECT (value #>> '{}')::int FROM public.platform_settings WHERE key = 'auto_confirm_delivery_days'), 14)
+    INTO v_days;
+
+  FOR rec IN
+    SELECT oi.id, oi.order_id, oi.seller_id, o.buyer_id
+      FROM public.order_items oi
+      JOIN public.orders o ON o.id = oi.order_id
+     WHERE oi.status = 'shipped'
+       AND oi.shipped_at IS NOT NULL
+       AND oi.shipped_at <= now() - make_interval(days => greatest(1, v_days))
+       AND EXISTS (
+         SELECT 1 FROM public.payments p
+          WHERE p.order_id = oi.order_id AND p.status = 'succeeded' AND p.environment = 'live'
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM public.disputes d
+          WHERE d.order_item_id = oi.id AND d.status NOT LIKE 'resolved%'
+       )
+     FOR UPDATE OF oi SKIP LOCKED
+  LOOP
+    UPDATE public.order_items
+       SET status = 'delivered', delivered_at = now()
+     WHERE id = rec.id;
+
+    IF NOT EXISTS (
+      SELECT 1 FROM public.order_items
+       WHERE order_id = rec.order_id AND status NOT IN ('delivered', 'cancelled')
+    ) THEN
+      UPDATE public.orders SET status = 'delivered' WHERE id = rec.order_id;
+    END IF;
+
+    PERFORM public.notify(rec.buyer_id, 'Entrega confirmada automaticamente', 'O prazo pós-envio terminou sem problemas abertos.', '/pedidos/' || rec.order_id::text);
+    PERFORM public.notify((SELECT user_id FROM public.sellers WHERE id = rec.seller_id), 'Entrega confirmada automaticamente', 'O saldo entrará no ciclo normal de liberação.', '/minha-loja');
+    v_count := v_count + 1;
+  END LOOP;
+
+  RETURN v_count;
+END $$;
+REVOKE ALL ON FUNCTION public.auto_confirm_delivered_orders(int) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.auto_confirm_delivered_orders(int) TO authenticated, service_role;
+
+-- 5. Seller Thermometer (Mercado Livre 4-pillar model) + Medals + Automatic Strikes + Public Seller Ranking
+CREATE OR REPLACE FUNCTION public.get_seller_thermometer(_seller_id uuid)
+RETURNS TABLE(
+  rating numeric,
+  reviews bigint,
+  completed_sales bigint,
+  cancelled bigint,
+  total_items bigint,
+  claims bigint,
+  claim_rate numeric,
+  cancel_rate numeric,
+  on_time_rate numeric,
+  avg_response_hours numeric,
+  thermometer text,
+  medal text,
+  strike_status text,
+  score numeric
+)
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_rep record;
+  v_claims bigint := 0;
+  v_shipped bigint := 0;
+  v_on_time bigint := 0;
+  v_avg_resp numeric := NULL;
+  v_claim_rate numeric := 0;
+  v_cancel_rate numeric := 0;
+  v_on_time_rate numeric := 100;
+  v_max_claim numeric := 5;
+  v_max_cancel numeric := 5;
+  v_cleared timestamptz;
+  v_thermo text := 'new';
+  v_medal text := 'none';
+  v_strike text := 'ok';
+  v_score numeric := 0;
+BEGIN
+  IF NOT public.is_approved_seller(_seller_id)
+     AND NOT public.owns_seller(_seller_id)
+     AND NOT public.has_role(auth.uid(), 'admin')
+     AND coalesce(current_setting('request.jwt.claim.role', true), '') <> 'service_role'
+     AND current_user NOT IN ('service_role', 'postgres', 'supabase_admin') THEN
+    RETURN;
+  END IF;
+
+  SELECT * INTO v_rep FROM public.get_seller_reputation(_seller_id);
+
+  SELECT COALESCE((value #>> '{}')::numeric, 5) INTO v_max_claim FROM public.platform_settings WHERE key = 'max_claim_rate_pct';
+  SELECT COALESCE((value #>> '{}')::numeric, 5) INTO v_max_cancel FROM public.platform_settings WHERE key = 'max_cancel_rate_pct';
+  SELECT s.strike_cleared_at INTO v_cleared FROM public.sellers s WHERE s.id = _seller_id;
+
+  SELECT count(*) INTO v_claims
+    FROM public.disputes d
+   WHERE d.seller_id = _seller_id
+     AND EXISTS (
+       SELECT 1 FROM public.payments p
+        WHERE p.order_id = d.order_id AND p.status = 'succeeded' AND p.environment = 'live'
+     );
+
+  SELECT count(*),
+         count(*) FILTER (WHERE oi.ship_by IS NULL OR oi.shipped_at <= oi.ship_by)
+    INTO v_shipped, v_on_time
+    FROM public.order_items oi
+   WHERE oi.seller_id = _seller_id
+     AND oi.shipped_at IS NOT NULL
+     AND EXISTS (
+       SELECT 1 FROM public.payments p
+        WHERE p.order_id = oi.order_id AND p.status = 'succeeded' AND p.environment = 'live'
+     );
+
+  SELECT round(avg(extract(epoch FROM (q.answered_at - q.created_at)) / 3600.0)::numeric, 1)
+    INTO v_avg_resp
+    FROM public.listing_questions q
+   WHERE q.seller_id = _seller_id
+     AND q.answered_at IS NOT NULL
+     AND q.created_at >= now() - interval '90 days';
+
+  IF COALESCE(v_rep.total_items, 0) > 0 THEN
+    v_claim_rate := round((v_claims::numeric / v_rep.total_items::numeric) * 100, 1);
+    v_cancel_rate := round((COALESCE(v_rep.cancelled, 0)::numeric / v_rep.total_items::numeric) * 100, 1);
+  END IF;
+
+  IF v_shipped > 0 THEN
+    v_on_time_rate := round((v_on_time::numeric / v_shipped::numeric) * 100, 1);
+  END IF;
+
+  -- Thermometer color (5 bars, Mercado Livre style)
+  IF COALESCE(v_rep.completed_sales, 0) < 3 AND COALESCE(v_rep.reviews, 0) < 3 THEN
+    v_thermo := 'new';
+  ELSIF v_claim_rate > 8 OR v_cancel_rate > 8 OR v_on_time_rate < 75 OR (COALESCE(v_rep.reviews, 0) >= 3 AND COALESCE(v_rep.rating, 5) < 3.2) THEN
+    v_thermo := 'red';
+  ELSIF v_claim_rate > 5 OR v_cancel_rate > 5 OR v_on_time_rate < 85 OR (COALESCE(v_rep.reviews, 0) >= 3 AND COALESCE(v_rep.rating, 5) < 3.8) THEN
+    v_thermo := 'orange';
+  ELSIF v_claim_rate > 3 OR v_cancel_rate > 3 OR v_on_time_rate < 90 OR (COALESCE(v_rep.reviews, 0) >= 3 AND COALESCE(v_rep.rating, 5) < 4.3) THEN
+    v_thermo := 'yellow';
+  ELSIF v_claim_rate > 2 OR v_cancel_rate > 2 OR v_on_time_rate < 95 OR (COALESCE(v_rep.reviews, 0) >= 3 AND COALESCE(v_rep.rating, 5) < 4.7) THEN
+    v_thermo := 'light_green';
+  ELSE
+    v_thermo := 'green';
+  END IF;
+
+  -- Medals (requires green thermometer + real completed sales volume)
+  IF v_thermo = 'green' THEN
+    IF COALESCE(v_rep.completed_sales, 0) >= 250 THEN
+      v_medal := 'lider_platinum';
+    ELSIF COALESCE(v_rep.completed_sales, 0) >= 75 THEN
+      v_medal := 'lider_gold';
+    ELSIF COALESCE(v_rep.completed_sales, 0) >= 25 THEN
+      v_medal := 'lider';
+    END IF;
+  END IF;
+
+  -- Automatic strike status (requires >= 5 total items to avoid punishing new stores)
+  IF COALESCE(v_rep.total_items, 0) >= 5 AND (v_claim_rate > v_max_claim OR v_cancel_rate > v_max_cancel) THEN
+    v_strike := CASE WHEN v_cleared IS NOT NULL THEN 'warning' ELSE 'restricted' END;
+  ELSIF COALESCE(v_rep.total_items, 0) >= 5 AND (v_claim_rate > (v_max_claim * 0.6) OR v_cancel_rate > (v_max_cancel * 0.6) OR v_on_time_rate < 90) THEN
+    v_strike := 'warning';
+  ELSE
+    v_strike := 'ok';
+  END IF;
+
+  -- Composite score (0..1000) for ranking
+  v_score := round(
+    (COALESCE(v_rep.rating, 0) * 120)
+    + (least(COALESCE(v_rep.completed_sales, 0), 500) * 0.6)
+    + (v_on_time_rate * 1.5)
+    - (v_claim_rate * 12)
+    - (v_cancel_rate * 10)
+    + CASE v_medal
+        WHEN 'lider_platinum' THEN 120
+        WHEN 'lider_gold' THEN 75
+        WHEN 'lider' THEN 35
+        ELSE 0
+      END,
+    1
+  );
+
+  RETURN QUERY SELECT
+    COALESCE(v_rep.rating, 0)::numeric,
+    COALESCE(v_rep.reviews, 0)::bigint,
+    COALESCE(v_rep.completed_sales, 0)::bigint,
+    COALESCE(v_rep.cancelled, 0)::bigint,
+    COALESCE(v_rep.total_items, 0)::bigint,
+    v_claims,
+    v_claim_rate,
+    v_cancel_rate,
+    v_on_time_rate,
+    v_avg_resp,
+    v_thermo,
+    v_medal,
+    v_strike,
+    greatest(v_score, 0)::numeric;
+END $$;
+REVOKE ALL ON FUNCTION public.get_seller_thermometer(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.get_seller_thermometer(uuid) TO anon, authenticated, service_role;
+
+CREATE OR REPLACE FUNCTION public.list_ranked_sellers(
+  _state text DEFAULT NULL,
+  _sort text DEFAULT 'score',
+  _limit int DEFAULT 50
+)
+RETURNS TABLE(
+  id uuid,
+  store_name text,
+  slug text,
+  city text,
+  state text,
+  is_official boolean,
+  logo_url text,
+  rating numeric,
+  reviews bigint,
+  completed_sales bigint,
+  active_listings bigint,
+  claim_rate numeric,
+  cancel_rate numeric,
+  on_time_rate numeric,
+  avg_response_hours numeric,
+  thermometer text,
+  medal text,
+  strike_status text,
+  score numeric
+)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT
+    s.id,
+    s.store_name,
+    s.slug,
+    s.city,
+    s.state,
+    s.is_official,
+    s.logo_url,
+    t.rating,
+    t.reviews,
+    t.completed_sales,
+    (SELECT count(*) FROM public.listings l WHERE l.seller_id = s.id AND l.status = 'active' AND l.quantity > 0) AS active_listings,
+    t.claim_rate,
+    t.cancel_rate,
+    t.on_time_rate,
+    t.avg_response_hours,
+    t.thermometer,
+    t.medal,
+    t.strike_status,
+    t.score
+  FROM public.sellers s
+  CROSS JOIN LATERAL public.get_seller_thermometer(s.id) t
+  WHERE s.status = 'approved'
+    AND (_state IS NULL OR trim(_state) = '' OR upper(s.state) = upper(trim(_state)))
+  ORDER BY
+    CASE WHEN _sort = 'sales' THEN t.completed_sales::numeric
+         WHEN _sort = 'rating' THEN t.rating
+         ELSE t.score
+    END DESC,
+    t.completed_sales DESC,
+    s.created_at ASC
+  LIMIT greatest(1, least(coalesce(_limit, 50), 200));
+$$;
+REVOKE ALL ON FUNCTION public.list_ranked_sellers(text, text, int) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.list_ranked_sellers(text, text, int) TO anon, authenticated, service_role;
+
+-- Upgrade listing activation trigger to enforce BOTH new-seller cap and automatic strike freeze
+CREATE OR REPLACE FUNCTION public.enforce_listing_limit()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_limit int;
+  v_thermo record;
+BEGIN
+  IF NEW.status <> 'active' THEN RETURN NEW; END IF;
+  IF TG_OP = 'UPDATE' AND OLD.status = 'active' THEN RETURN NEW; END IF;
+
+  SELECT * INTO v_thermo FROM public.get_seller_thermometer(NEW.seller_id);
+
+  IF v_thermo.strike_status = 'restricted' THEN
+    RAISE EXCEPTION 'Loja temporariamente restrita por taxa elevada de reclamações ou cancelamentos. Fale com o suporte PokePlace para revisão.';
+  END IF;
+
+  SELECT COALESCE((value #>> '{}')::int, 50) INTO v_limit FROM public.platform_settings WHERE key = 'new_seller_listing_limit';
+  IF COALESCE(v_thermo.completed_sales, 0) < 5
+     AND (SELECT count(*) FROM public.listings WHERE seller_id = NEW.seller_id AND status = 'active' AND id <> NEW.id) >= COALESCE(v_limit, 50) THEN
+    RAISE EXCEPTION 'Lojas novas podem ter até % anúncios ativos até completar 5 vendas', v_limit;
+  END IF;
+
+  RETURN NEW;
+END $$;
+
+-- 6. LGPD-safe Opt-in Buyer Profiles, Buyer Reviews & Buyer Rankings
+CREATE TABLE IF NOT EXISTS public.buyer_profiles (
+  user_id uuid PRIMARY KEY,
+  display_name text NOT NULL CHECK (length(trim(display_name)) BETWEEN 2 AND 40),
+  show_in_ranking boolean NOT NULL DEFAULT false,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+GRANT SELECT, INSERT, UPDATE ON public.buyer_profiles TO authenticated;
+GRANT ALL ON public.buyer_profiles TO service_role;
+ALTER TABLE public.buyer_profiles ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS buyer_profiles_self_select ON public.buyer_profiles;
+CREATE POLICY buyer_profiles_self_select ON public.buyer_profiles
+  FOR SELECT TO authenticated USING (user_id = auth.uid() OR public.has_role(auth.uid(), 'admin'));
+DROP POLICY IF EXISTS buyer_profiles_self_insert ON public.buyer_profiles;
+CREATE POLICY buyer_profiles_self_insert ON public.buyer_profiles
+  FOR INSERT TO authenticated WITH CHECK (user_id = auth.uid());
+DROP POLICY IF EXISTS buyer_profiles_self_update ON public.buyer_profiles;
+CREATE POLICY buyer_profiles_self_update ON public.buyer_profiles
+  FOR UPDATE TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+
+CREATE TABLE IF NOT EXISTS public.buyer_reviews (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id uuid NOT NULL REFERENCES public.orders(id) ON DELETE CASCADE,
+  seller_id uuid NOT NULL REFERENCES public.sellers(id) ON DELETE CASCADE,
+  buyer_id uuid NOT NULL,
+  rating int NOT NULL CHECK (rating BETWEEN 1 AND 5),
+  comment text CHECK (comment IS NULL OR length(trim(comment)) <= 500),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (order_id, seller_id)
+);
+GRANT SELECT ON public.buyer_reviews TO authenticated;
+GRANT ALL ON public.buyer_reviews TO service_role;
+ALTER TABLE public.buyer_reviews ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS buyer_reviews_read ON public.buyer_reviews;
+CREATE POLICY buyer_reviews_read ON public.buyer_reviews
+  FOR SELECT TO authenticated
+  USING (buyer_id = auth.uid() OR public.owns_seller(seller_id) OR public.has_role(auth.uid(), 'admin'));
+
+CREATE OR REPLACE FUNCTION public.submit_buyer_review(
+  _order_id uuid,
+  _seller_id uuid,
+  _rating int,
+  _comment text DEFAULT NULL
+)
+RETURNS uuid
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_buyer uuid;
+  v_id uuid;
+BEGIN
+  IF NOT public.owns_seller(_seller_id) THEN
+    RAISE EXCEPTION 'Somente a loja responsável pode avaliar o comprador';
+  END IF;
+  IF _rating NOT BETWEEN 1 AND 5 THEN
+    RAISE EXCEPTION 'Nota deve ser de 1 a 5';
+  END IF;
+
+  SELECT o.buyer_id INTO v_buyer
+    FROM public.orders o
+    JOIN public.order_items oi ON oi.order_id = o.id
+   WHERE o.id = _order_id
+     AND oi.seller_id = _seller_id
+     AND oi.status = 'delivered'
+     AND EXISTS (
+       SELECT 1 FROM public.payments p
+        WHERE p.order_id = o.id AND p.status = 'succeeded' AND p.environment = 'live'
+     )
+   LIMIT 1;
+
+  IF v_buyer IS NULL THEN
+    RAISE EXCEPTION 'Só é possível avaliar compradores de pedidos pagos e entregues';
+  END IF;
+
+  INSERT INTO public.buyer_reviews (order_id, seller_id, buyer_id, rating, comment)
+  VALUES (_order_id, _seller_id, v_buyer, _rating, NULLIF(trim(coalesce(_comment, '')), ''))
+  RETURNING id INTO v_id;
+
+  PERFORM public.notify(v_buyer, 'Você recebeu uma avaliação de loja', format('Nota %s/5 pelo seu pedido.', _rating), '/conta');
+  RETURN v_id;
+END $$;
+GRANT EXECUTE ON FUNCTION public.submit_buyer_review(uuid, uuid, int, text) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.get_buyer_reputation(_buyer_id uuid)
+RETURNS TABLE(
+  completed_purchases bigint,
+  rating numeric,
+  reviews bigint,
+  disputes bigint,
+  dispute_rate numeric,
+  tier text,
+  score numeric
+)
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_purchases bigint := 0;
+  v_rating numeric := 0;
+  v_reviews bigint := 0;
+  v_disputes bigint := 0;
+  v_disp_rate numeric := 0;
+  v_tier text := 'novo';
+  v_score numeric := 0;
+BEGIN
+  IF auth.uid() IS NOT NULL
+     AND _buyer_id <> auth.uid()
+     AND NOT public.has_role(auth.uid(), 'admin')
+     AND coalesce(current_setting('request.jwt.claim.role', true), '') <> 'service_role'
+     AND NOT EXISTS (SELECT 1 FROM public.buyer_profiles bp WHERE bp.user_id = _buyer_id AND bp.show_in_ranking = true)
+     AND NOT EXISTS (
+       SELECT 1 FROM public.orders o
+       JOIN public.order_items oi ON oi.order_id = o.id
+       WHERE o.buyer_id = _buyer_id AND public.owns_seller(oi.seller_id)
+     ) THEN
+    RAISE EXCEPTION 'Acesso negado';
+  END IF;
+
+  SELECT count(DISTINCT oi.order_id) INTO v_purchases
+    FROM public.order_items oi
+    JOIN public.orders o ON o.id = oi.order_id
+   WHERE o.buyer_id = _buyer_id
+     AND oi.status = 'delivered'
+     AND EXISTS (
+       SELECT 1 FROM public.payments p
+        WHERE p.order_id = o.id AND p.status = 'succeeded' AND p.environment = 'live'
+     );
+
+  SELECT COALESCE(round(avg(br.rating)::numeric, 2), 0), count(*)
+    INTO v_rating, v_reviews
+    FROM public.buyer_reviews br
+   WHERE br.buyer_id = _buyer_id;
+
+  SELECT count(*) INTO v_disputes
+    FROM public.disputes d
+   WHERE d.buyer_id = _buyer_id
+     AND d.status = 'resolved_seller';
+
+  IF v_purchases > 0 THEN
+    v_disp_rate := round((v_disputes::numeric / v_purchases::numeric) * 100, 1);
+  END IF;
+
+  IF v_purchases >= 30 AND (v_reviews = 0 OR v_rating >= 4.7) AND v_disp_rate <= 2 THEN
+    v_tier := 'vip';
+  ELSIF v_purchases >= 15 AND (v_reviews = 0 OR v_rating >= 4.5) AND v_disp_rate <= 4 THEN
+    v_tier := 'ouro';
+  ELSIF v_purchases >= 5 AND (v_reviews = 0 OR v_rating >= 4.2) AND v_disp_rate <= 6 THEN
+    v_tier := 'confiavel';
+  ELSIF v_purchases >= 1 THEN
+    v_tier := 'regular';
+  ELSE
+    v_tier := 'novo';
+  END IF;
+
+  v_score := round((v_purchases * 12) + (v_rating * 60) - (v_disp_rate * 8), 1);
+
+  RETURN QUERY SELECT v_purchases, v_rating, v_reviews, v_disputes, v_disp_rate, v_tier, greatest(v_score, 0)::numeric;
+END $$;
+REVOKE ALL ON FUNCTION public.get_buyer_reputation(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.get_buyer_reputation(uuid) TO authenticated, service_role;
+
+CREATE OR REPLACE FUNCTION public.list_ranked_buyers(_limit int DEFAULT 50)
+RETURNS TABLE(
+  display_name text,
+  completed_purchases bigint,
+  rating numeric,
+  reviews bigint,
+  dispute_rate numeric,
+  tier text,
+  score numeric
+)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT
+    bp.display_name,
+    r.completed_purchases,
+    r.rating,
+    r.reviews,
+    r.dispute_rate,
+    r.tier,
+    r.score
+  FROM public.buyer_profiles bp
+  CROSS JOIN LATERAL public.get_buyer_reputation(bp.user_id) r
+  WHERE bp.show_in_ranking = true
+  ORDER BY r.score DESC, r.completed_purchases DESC, bp.updated_at ASC
+  LIMIT greatest(1, least(coalesce(_limit, 50), 200));
+$$;
+REVOKE ALL ON FUNCTION public.list_ranked_buyers(int) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.list_ranked_buyers(int) TO anon, authenticated, service_role;
+

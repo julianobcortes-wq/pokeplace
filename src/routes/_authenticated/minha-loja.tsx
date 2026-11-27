@@ -8,12 +8,13 @@ import { MediaUpload } from "@/components/MediaUpload";
 import { SupportInbox } from "@/components/SupportInbox";
 import { PageShell } from "@/components/SiteHeader";
 import { SellerTrustPanel } from "@/components/market";
-import { StoreProfileEditor, StoreReviews } from "@/components/seller-tools";
+import { BuyerReviewForm, StoreProfileEditor, StoreReviews } from "@/components/seller-tools";
 import { supabase } from "@/integrations/supabase/client";
 import { searchCards } from "@/lib/catalog.functions";
 import type { Database } from "@/integrations/supabase/types";
 import { updateOwnListing } from "@/lib/guard.functions";
 import { BRAND, CONDITIONS, FINISHES, LANGUAGES, SELLER_STATUS, money } from "@/lib/format";
+import { shippingSlaStatus } from "@/lib/marketplace/rules";
 
 export const Route = createFileRoute("/_authenticated/minha-loja")({
   head: () => ({
@@ -185,8 +186,30 @@ function MyStore() {
                         <br />
                         {s.orders?.ship_address}, {s.orders?.ship_city}/{s.orders?.ship_state} {s.orders?.ship_zip}
                       </td>
-                      <td>
+                      <td className="py-2">
+                        {s.status === "pending" && (() => {
+                          const sla = shippingSlaStatus((s as unknown as { ship_by?: string | null }).ship_by);
+                          if (!sla) return null;
+                          return (
+                            <p
+                              className={`mb-1.5 inline-block rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                                sla.overdue
+                                  ? "bg-destructive/15 text-destructive"
+                                  : sla.urgent
+                                    ? "bg-chart-4/20 text-chart-4"
+                                    : "bg-muted text-muted-foreground"
+                              }`}
+                            >
+                              SLA: {sla.label}
+                            </p>
+                          );
+                        })()}
                         <ShipmentControl item={s} onDone={refresh} />
+                        {s.status === "delivered" && (
+                          <div className="mt-2">
+                            <BuyerReviewForm orderId={s.order_id} sellerId={seller.id} buyerLabel={s.orders?.ship_name ?? undefined} />
+                          </div>
+                        )}
                       </td>
                     </tr>
                   ))}

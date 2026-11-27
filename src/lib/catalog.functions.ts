@@ -314,8 +314,13 @@ export const getStore = createServerFn({ method: "GET" })
       if (error) return null;
       const store = rows?.[0];
       if (!store) return null;
-      const [rep, listings, reviews] = await Promise.all([
+      const [rep, thermo, listings, reviews] = await Promise.all([
         db.rpc("get_seller_trust", { _seller_id: store.id }),
+        (db as unknown as {
+          rpc: (fn: string, args: Record<string, unknown>) => Promise<{ data: unknown[] | null; error: unknown }>;
+        })
+          .rpc("get_seller_thermometer", { _seller_id: store.id })
+          .catch(() => ({ data: null, error: null })),
         db
           .from("listings")
           .select("id,price,currency,condition,language,finish,quantity,card_id,cards(name,number,rarity,image_small,card_sets(name))")
@@ -331,7 +336,25 @@ export const getStore = createServerFn({ method: "GET" })
           .order("created_at", { ascending: false })
           .limit(50),
       ]);
-      return { store, reputation: rep.data?.[0] ?? null, listings: listings.data ?? [], reviews: reviews.data ?? [] };
+      const tRow = Array.isArray(thermo.data) && thermo.data[0] ? (thermo.data[0] as Record<string, unknown>) : null;
+      return {
+        store,
+        reputation: rep.data?.[0] ?? null,
+        thermometer: tRow
+          ? {
+              claim_rate: Number(tRow["claim_rate"] ?? 0),
+              cancel_rate: Number(tRow["cancel_rate"] ?? 0),
+              on_time_rate: Number(tRow["on_time_rate"] ?? 100),
+              avg_response_hours: tRow["avg_response_hours"] != null ? Number(tRow["avg_response_hours"]) : null,
+              thermometer: String(tRow["thermometer"] ?? "new"),
+              medal: String(tRow["medal"] ?? "none"),
+              strike_status: String(tRow["strike_status"] ?? "ok"),
+              score: Number(tRow["score"] ?? 0),
+            }
+          : null,
+        listings: listings.data ?? [],
+        reviews: reviews.data ?? [],
+      };
     } catch {
       return null;
     }

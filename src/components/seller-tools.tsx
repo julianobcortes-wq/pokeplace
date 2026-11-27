@@ -45,6 +45,117 @@ export function ReviewForm({ orderId, sellerId, storeName }: { orderId: string; 
   );
 }
 
+/** Seller-side: rate the buyer after a live-paid delivered order (enforced by submit_buyer_review RPC). */
+export function BuyerReviewForm({
+  orderId,
+  sellerId,
+  buyerLabel,
+}: {
+  orderId: string;
+  sellerId: string;
+  buyerLabel?: string | undefined;
+}) {
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [rating, setRating] = useState(5);
+  const [comment, setComment] = useState("");
+  const [busy, setBusy] = useState(false);
+  const { data: existing } = useQuery({
+    queryKey: ["buyer-review", orderId, sellerId],
+    queryFn: async () => {
+      const { data } = await (supabase as unknown as {
+        from: (t: string) => {
+          select: (s: string) => {
+            eq: (k: string, v: string) => {
+              eq: (k: string, v: string) => {
+                maybeSingle: () => Promise<{ data: { id: string; rating: number } | null }>;
+              };
+            };
+          };
+        };
+      })
+        .from("buyer_reviews")
+        .select("id,rating")
+        .eq("order_id", orderId)
+        .eq("seller_id", sellerId)
+        .maybeSingle();
+      return data ?? null;
+    },
+  });
+
+  if (existing) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-2.5 py-1 text-[11px] font-semibold text-success">
+        Comprador avaliado ({existing.rating}/5)
+      </span>
+    );
+  }
+
+  if (!open) {
+    return (
+      <Button size="sm" variant="outline" className="h-7 rounded-full text-xs" onClick={() => setOpen(true)}>
+        Avaliar comprador
+      </Button>
+    );
+  }
+
+  const send = async () => {
+    setBusy(true);
+    const { error } = await (supabase as unknown as {
+      rpc: (fn: string, args: Record<string, unknown>) => Promise<{ error: { message: string } | null }>;
+    }).rpc("submit_buyer_review", {
+      _order_id: orderId,
+      _seller_id: sellerId,
+      _rating: rating,
+      _comment: comment,
+    });
+    setBusy(false);
+    if (error) {
+      toast.error(error.message);
+    } else {
+      toast.success("Avaliação do comprador enviada");
+      setOpen(false);
+      qc.invalidateQueries({ queryKey: ["buyer-review", orderId, sellerId] });
+    }
+  };
+
+  return (
+    <div className="mt-2 space-y-2 rounded-xl border border-border bg-muted/40 p-2.5 text-left">
+      <p className="text-xs font-semibold">Avaliar {buyerLabel || "comprador"}</p>
+      <div className="flex items-center">
+        {[1, 2, 3, 4, 5].map((n) => (
+          <Button
+            key={n}
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label={`Nota comprador ${n}`}
+            onClick={() => setRating(n)}
+            className="h-7 w-7 p-0 hover:bg-transparent"
+          >
+            <Star className={`h-5 w-5 ${n <= rating ? "text-chart-4" : "text-border"}`} fill="currentColor" strokeWidth={0} />
+          </Button>
+        ))}
+      </div>
+      <input
+        value={comment}
+        onChange={(e) => setComment(e.target.value)}
+        maxLength={500}
+        placeholder="Comentário opcional"
+        className="w-full rounded-lg border border-input bg-card px-2.5 py-1 text-xs"
+      />
+      <div className="flex gap-1.5">
+        <Button size="sm" className="h-7 rounded-full text-xs" disabled={busy} onClick={send}>
+          Enviar
+        </Button>
+        <Button size="sm" variant="ghost" className="h-7 rounded-full text-xs" onClick={() => setOpen(false)}>
+          Cancelar
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 /** Seller-side: edit public profile fields. */
 export function StoreProfileEditor({ seller, onDone }: { seller: { id: string; slug: string; logo_url: string | null; cover_url: string | null; bio: string | null; shipping_policy: string | null; return_policy: string | null }; onDone: () => void }) {
   const [f, setF] = useState({ logo_url: seller.logo_url ?? "", cover_url: seller.cover_url ?? "", bio: seller.bio ?? "", shipping_policy: seller.shipping_policy ?? "", return_policy: seller.return_policy ?? "" });

@@ -18,6 +18,7 @@ import { Route as CarrinhoRouteImport } from './routes/carrinho'
 import { Route as CompraGarantidaRouteImport } from './routes/compra-garantida'
 import { Route as PlanosRouteImport } from './routes/planos'
 import { Route as PrivacidadeRouteImport } from './routes/privacidade'
+import { Route as RankingRouteImport } from './routes/ranking'
 import { Route as RegrasVendedorRouteImport } from './routes/regras-vendedor'
 import { Route as SegurancaRouteImport } from './routes/seguranca'
 import { Route as TermosRouteImport } from './routes/termos'
@@ -76,6 +77,11 @@ const PlanosRoute = PlanosRouteImport.update({
 const PrivacidadeRoute = PrivacidadeRouteImport.update({
   id: '/privacidade',
   path: '/privacidade',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RankingRoute = RankingRouteImport.update({
+  id: '/ranking',
+  path: '/ranking',
   getParentRoute: () => rootRouteImport,
 } as any)
 const RegrasVendedorRoute = RegrasVendedorRouteImport.update({
@@ -166,6 +172,7 @@ export interface FileRoutesByFullPath {
   '/compra-garantida': typeof CompraGarantidaRoute
   '/planos': typeof PlanosRoute
   '/privacidade': typeof PrivacidadeRoute
+  '/ranking': typeof RankingRoute
   '/regras-vendedor': typeof RegrasVendedorRoute
   '/seguranca': typeof SegurancaRoute
   '/termos': typeof TermosRoute
@@ -191,6 +198,7 @@ export interface FileRoutesByTo {
   '/compra-garantida': typeof CompraGarantidaRoute
   '/planos': typeof PlanosRoute
   '/privacidade': typeof PrivacidadeRoute
+  '/ranking': typeof RankingRoute
   '/regras-vendedor': typeof RegrasVendedorRoute
   '/seguranca': typeof SegurancaRoute
   '/termos': typeof TermosRoute
@@ -218,6 +226,7 @@ export interface FileRoutesById {
   '/compra-garantida': typeof CompraGarantidaRoute
   '/planos': typeof PlanosRoute
   '/privacidade': typeof PrivacidadeRoute
+  '/ranking': typeof RankingRoute
   '/regras-vendedor': typeof RegrasVendedorRoute
   '/seguranca': typeof SegurancaRoute
   '/termos': typeof TermosRoute
@@ -245,6 +254,7 @@ export interface FileRouteTypes {
     | '/compra-garantida'
     | '/planos'
     | '/privacidade'
+    | '/ranking'
     | '/regras-vendedor'
     | '/seguranca'
     | '/termos'
@@ -270,6 +280,7 @@ export interface FileRouteTypes {
     | '/compra-garantida'
     | '/planos'
     | '/privacidade'
+    | '/ranking'
     | '/regras-vendedor'
     | '/seguranca'
     | '/termos'
@@ -296,6 +307,7 @@ export interface FileRouteTypes {
     | '/compra-garantida'
     | '/planos'
     | '/privacidade'
+    | '/ranking'
     | '/regras-vendedor'
     | '/seguranca'
     | '/termos'
@@ -323,6 +335,7 @@ export interface RootRouteChildren {
   CompraGarantidaRoute: typeof CompraGarantidaRoute
   PlanosRoute: typeof PlanosRoute
   PrivacidadeRoute: typeof PrivacidadeRoute
+  RankingRoute: typeof RankingRoute
   RegrasVendedorRoute: typeof RegrasVendedorRoute
   SegurancaRoute: typeof SegurancaRoute
   TermosRoute: typeof TermosRoute
@@ -396,6 +409,13 @@ declare module '@tanstack/react-router' {
       path: '/privacidade'
       fullPath: '/privacidade'
       preLoaderRoute: typeof PrivacidadeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/ranking': {
+      id: '/ranking'
+      path: '/ranking'
+      fullPath: '/ranking'
+      preLoaderRoute: typeof RankingRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/regras-vendedor': {
@@ -539,6 +559,7 @@ const rootRouteChildren: RootRouteChildren = {
   CompraGarantidaRoute: CompraGarantidaRoute,
   PlanosRoute: PlanosRoute,
   PrivacidadeRoute: PrivacidadeRoute,
+  RankingRoute: RankingRoute,
   RegrasVendedorRoute: RegrasVendedorRoute,
   SegurancaRoute: SegurancaRoute,
   TermosRoute: TermosRoute,

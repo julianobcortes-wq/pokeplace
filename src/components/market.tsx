@@ -1,10 +1,21 @@
 import { MarketplaceImage } from "./MarketplaceImage";
 import { Link } from "@tanstack/react-router";
-import { BadgeCheck, ShieldCheck, Sparkles, Star } from "lucide-react";
+import { AlertTriangle, Award, BadgeCheck, Clock, ShieldCheck, Sparkles, Star } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { isSupabaseConfigured } from "@/lib/runtime-config";
+import {
+  BUYER_TIER_META,
+  formatResponseTime,
+  legacyLevelToThermometer,
+  MEDAL_META,
+  THERMOMETER_META,
+  type BuyerTier,
+  type SellerMedal,
+  type StrikeStatus,
+  type ThermometerLevel,
+} from "@/lib/marketplace/rules";
 
 function cardImageFallbacks(src: string | null): string[] {
   if (!src) return [];
@@ -128,15 +139,77 @@ export function levelOf(rating: number | null | undefined, reviews: number | nul
   return r >= 4.7 ? "excelente" : r >= 4.2 ? "otima" : r >= 3.5 ? "boa" : "regular";
 }
 
-export function ReputationMeter({ level }: { level: string }) {
-  const l = LEVELS[level] ?? { label: "Loja nova", step: 0 };
-  const colors = ["bg-destructive", "bg-chart-5", "bg-chart-4", "bg-success/70", "bg-success"];
+export function ThermometerBar({
+  thermometer,
+  compact = false,
+}: {
+  thermometer: ThermometerLevel;
+  compact?: boolean;
+}) {
+  const meta = THERMOMETER_META[thermometer] ?? THERMOMETER_META.new;
+  const segments = [
+    { key: "red", active: "bg-destructive", idle: "bg-destructive/20" },
+    { key: "orange", active: "bg-chart-5", idle: "bg-chart-5/20" },
+    { key: "yellow", active: "bg-chart-4", idle: "bg-chart-4/20" },
+    { key: "light_green", active: "bg-success/70", idle: "bg-success/15" },
+    { key: "green", active: "bg-success", idle: "bg-success/20" },
+  ] as const;
+
   return (
     <div>
-      <div className="flex gap-1">{colors.map((c, i) => <span key={c} className={`h-1.5 flex-1 rounded-full ${l.step > 0 && i <= l.step ? c : "bg-muted"} ${l.step === i + 0 && l.step > 0 ? "ring-2 ring-foreground/20" : ""}`} />)}</div>
-      <p className="mt-1 text-xs font-medium">{l.label}</p>
+      <div className="flex items-center gap-1" aria-label={`Termômetro de reputação: ${meta.label}`}>
+        {segments.map((seg, idx) => {
+          const isCurrent = meta.step === idx + 1;
+          const isReached = meta.step > 0 && idx + 1 <= meta.step;
+          return (
+            <span
+              key={seg.key}
+              className={`flex-1 rounded-full transition-all ${isCurrent ? "h-2.5 ring-2 ring-foreground/25" : "h-1.5"} ${
+                meta.step === 0 ? "bg-muted" : isReached ? seg.active : seg.idle
+              }`}
+            />
+          );
+        })}
+      </div>
+      {!compact && <p className={`mt-1.5 text-xs font-semibold ${meta.textClass}`}>{meta.label}</p>}
     </div>
   );
+}
+
+export function MedalBadge({ medal }: { medal: SellerMedal | string | null | undefined }) {
+  if (!medal || medal === "none") return null;
+  const key = (medal in MEDAL_META ? medal : "none") as SellerMedal;
+  const label = MEDAL_META[key].label;
+  if (!label) return null;
+  const styles: Record<Exclude<SellerMedal, "none">, string> = {
+    lider: "bg-success/15 text-success border-success/30",
+    lider_gold: "bg-chart-4/20 text-chart-4 border-chart-4/40",
+    lider_platinum: "bg-primary/15 text-primary border-primary/35",
+  };
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-bold ${
+        styles[key as Exclude<SellerMedal, "none">]
+      }`}
+    >
+      <Award className="h-3 w-3" />
+      {label}
+    </span>
+  );
+}
+
+export function BuyerTierBadge({ tier }: { tier: BuyerTier | string }) {
+  const key = (tier in BUYER_TIER_META ? tier : "novo") as BuyerTier;
+  const meta = BUYER_TIER_META[key];
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-bold ${meta.badgeClass}`}>
+      {meta.label}
+    </span>
+  );
+}
+
+export function ReputationMeter({ level, thermometer }: { level: string; thermometer?: ThermometerLevel | undefined }) {
+  return <ThermometerBar thermometer={thermometer ?? legacyLevelToThermometer(level)} />;
 }
 
 export function StoreAvatar({ name, logo, size = "h-10 w-10" }: { name: string; logo?: string | null | undefined; size?: string }) {
@@ -182,14 +255,100 @@ export function useSellerTrust(id?: string) {
   });
 }
 
+type SellerThermoRow = {
+  claim_rate: number;
+  cancel_rate: number;
+  on_time_rate: number;
+  avg_response_hours: number | null;
+  thermometer: ThermometerLevel;
+  medal: SellerMedal;
+  strike_status: StrikeStatus;
+  score: number;
+};
+
+export function useSellerThermometer(id?: string) {
+  return useQuery<SellerThermoRow | null>({
+    queryKey: ["seller-thermometer", id],
+    enabled: !!id && isSupabaseConfigured(),
+    staleTime: 60000,
+    queryFn: async () => {
+      if (!id) return null;
+      const { data, error } = await (supabase as unknown as {
+        rpc: (fn: string, args: Record<string, unknown>) => Promise<{ data: unknown[] | null; error: unknown }>;
+      }).rpc("get_seller_thermometer", { _seller_id: id });
+      if (error || !Array.isArray(data) || !data[0]) return null;
+      const r = data[0] as Record<string, unknown>;
+      return {
+        claim_rate: Number(r["claim_rate"] ?? 0),
+        cancel_rate: Number(r["cancel_rate"] ?? 0),
+        on_time_rate: Number(r["on_time_rate"] ?? 100),
+        avg_response_hours: r["avg_response_hours"] != null ? Number(r["avg_response_hours"]) : null,
+        thermometer: String(r["thermometer"] ?? "new") as ThermometerLevel,
+        medal: String(r["medal"] ?? "none") as SellerMedal,
+        strike_status: String(r["strike_status"] ?? "ok") as StrikeStatus,
+        score: Number(r["score"] ?? 0),
+      };
+    },
+  });
+}
+
 export function SellerTrustPanel({ sellerId, approved = false }: { sellerId: string; approved?: boolean }) {
   const { data, isPending, isError } = useSellerTrust(sellerId);
+  const { data: thermo } = useSellerThermometer(sellerId);
+  const activeThermometer = thermo?.thermometer ?? legacyLevelToThermometer(data?.level);
   return <section className="border-y border-border py-6">
-    <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="font-display text-xl font-bold">Reputação da loja</h2>{approved && <VerifiedPill />}</div>
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <h2 className="font-display text-xl font-bold">Termômetro de reputação</h2>
+        {thermo && <MedalBadge medal={thermo.medal} />}
+      </div>
+      <div className="flex items-center gap-2">
+        {approved && <VerifiedPill />}
+        <Link to="/ranking" className="text-xs font-semibold text-primary hover:underline">Ver ranking →</Link>
+      </div>
+    </div>
+    {thermo?.strike_status === "restricted" && (
+      <div className="mt-3 flex items-start gap-2 rounded-xl border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive">
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+        <p><b>Restrição automática ativa:</b> taxa de reclamações ou cancelamentos acima do limite da plataforma. Novos anúncios ficam pausados até revisão do suporte.</p>
+      </div>
+    )}
+    {thermo?.strike_status === "warning" && (
+      <div className="mt-3 flex items-start gap-2 rounded-xl border border-chart-4/40 bg-chart-4/10 p-3 text-xs text-foreground">
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-chart-4" />
+        <p><b>Alerta de desempenho:</b> mantenha reclamações e cancelamentos abaixo de 5% e postagens no prazo acima de 90% para evitar restrições.</p>
+      </div>
+    )}
     {isError ? <p className="mt-3 text-sm text-muted-foreground">Não foi possível consultar a reputação agora.</p> : isPending ? <p className="mt-3 text-sm text-muted-foreground">Consultando reputação…</p> : data ? <>
-      <div className="mt-4 grid gap-6 sm:grid-cols-3"><ReputationMeter level={data.level} /><div><p className="num text-2xl font-bold">{data.reviews ? Number(data.rating).toFixed(1) : "—"}</p><p className="text-xs text-muted-foreground">{data.reviews} avaliações verificadas</p></div><div><p className="num text-2xl font-bold">{data.completed_sales}</p><p className="text-xs text-muted-foreground">itens entregues com pagamento real</p></div></div>
-      <p className="mt-4 text-sm text-muted-foreground">{data.reviews < 3 ? "Loja nova: ainda não há avaliações suficientes para classificar sua reputação." : "Nível calculado pelas avaliações dos compradores."} Pedidos de teste não contam.</p>
-      <details className="mt-3 text-sm"><summary className="cursor-pointer font-semibold">Critérios dos níveis</summary><dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-muted-foreground"><dt>Loja nova</dt><dd>Menos de 3 avaliações</dd><dt>Regular</dt><dd>Nota abaixo de 3,5</dd><dt>Boa</dt><dd>Nota de 3,5 a 4,19</dd><dt>Ótima</dt><dd>Nota de 4,2 a 4,69</dd><dt>Excelente</dt><dd>Nota a partir de 4,7</dd></dl><p className="mt-3 text-xs text-muted-foreground">Os níveis não são comprados. Curadoria e reputação são critérios distintos; não representam garantia de reembolso.</p></details>
+      <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="sm:col-span-2 lg:col-span-1">
+          <p className="mb-1.5 text-xs text-muted-foreground">Termômetro</p>
+          <ThermometerBar thermometer={activeThermometer} />
+        </div>
+        <div>
+          <p className="num text-2xl font-bold">{data.reviews ? Number(data.rating).toFixed(1) : "—"}</p>
+          <p className="text-xs text-muted-foreground">{data.reviews} avaliações verificadas</p>
+        </div>
+        <div>
+          <p className="num text-2xl font-bold">{data.completed_sales}</p>
+          <p className="text-xs text-muted-foreground">vendas concluídas</p>
+        </div>
+        <div>
+          <p className="num text-2xl font-bold">{thermo ? `${thermo.on_time_rate.toFixed(0)}%` : "—"}</p>
+          <p className="text-xs text-muted-foreground">envios no prazo (SLA)</p>
+        </div>
+        <div>
+          <p className="num text-2xl font-bold">{thermo ? `${thermo.claim_rate.toFixed(1)}%` : "—"}</p>
+          <p className="text-xs text-muted-foreground">
+            reclamações · {thermo ? `${thermo.cancel_rate.toFixed(1)}% cancel.` : "0% cancel."}
+          </p>
+        </div>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+        <span className="inline-flex items-center gap-1"><Clock className="h-3.5 w-3.5" /> {formatResponseTime(thermo?.avg_response_hours)}</span>
+        <span>· {THERMOMETER_META[activeThermometer].summary} Pedidos de teste não contam.</span>
+      </div>
+      <details className="mt-3 text-sm"><summary className="cursor-pointer font-semibold">Critérios do termômetro e medalhas</summary><dl className="mt-3 grid grid-cols-1 gap-x-6 gap-y-2 text-muted-foreground sm:grid-cols-2"><dt className="font-medium text-foreground">Termômetro (5 cores)</dt><dd>Combina nota dos compradores, % de envios no prazo (SLA), % de reclamações e % de cancelamentos em vendas reais.</dd><dt className="font-medium text-foreground">PokeLíder / Gold / Platinum</dt><dd>Termômetro verde escuro + 25 / 75 / 250 vendas concluídas, reclamações &lt; 2%, cancelamentos &lt; 2% e envios no prazo ≥ 95%.</dd><dt className="font-medium text-foreground">Proteção automática (Strikes)</dt><dd>Com 5+ vendas, taxas de reclamação ou cancelamento acima de 5% bloqueiam novos anúncios até revisão do suporte.</dd><dt className="font-medium text-foreground">Independência</dt><dd>Medalhas e posições no ranking nunca são compradas — são calculadas automaticamente no banco de dados.</dd></dl></details>
     </> : <p className="mt-3 text-sm text-muted-foreground">Reputação ainda indisponível.</p>}
   </section>;
 }

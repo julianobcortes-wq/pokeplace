@@ -15,7 +15,13 @@ const f = "w-full rounded-md border border-input bg-background px-3 py-2 text-sm
 const box = "rounded-md bg-card p-5 shadow-sm";
 const err = (e: { message: string } | null, ok?: string) => { if (e) { toast.error(e.message); return false; } if (ok) toast.success(ok); return true; };
 
-export const DISPUTE_REASON: Record<string, string> = { not_received: "Não recebi", not_as_described: "Diferente do anúncio", damaged: "Chegou danificado", other: "Outro" };
+export const DISPUTE_REASON: Record<string, string> = {
+  not_received: "Não recebi",
+  not_as_described: "Diferente do anúncio",
+  damaged: "Chegou danificado",
+  regret_7d: "Arrependimento — 7 dias (CDC Art. 49)",
+  other: "Outro",
+};
 export const DISPUTE_STATUS: Record<string, string> = { open: "Aguardando a loja", seller_responded: "Loja respondeu", escalated: "Em mediação PokePlace", resolved_refund: "Resolvido: reembolso total", resolved_partial: "Resolvido: reembolso parcial", resolved_seller: "Resolvido a favor da loja" };
 
 /* ---------- Notificações ---------- */
@@ -156,13 +162,41 @@ export function OrderChat({ orderId, sellerId, mine }: { orderId: string; seller
   );
 }
 
-export function DisputeThread({ dispute, role }: { dispute: { id: string; status: string; reason: string; seller_deadline: string; resolution_note: string | null; resolution_amount: number | null }; role: "buyer" | "seller" | "admin" }) {
+export function DisputeThread({
+  dispute,
+  role,
+}: {
+  dispute: {
+    id: string;
+    status: string;
+    reason: string;
+    seller_deadline: string;
+    resolution_note: string | null;
+    resolution_amount: number | null;
+    return_carrier?: string | null;
+    return_tracking_code?: string | null;
+    return_submitted_at?: string | null;
+  };
+  role: "buyer" | "seller" | "admin";
+}) {
   const qc = useQueryClient();
   const [body, setBody] = useState("");
   const [amount, setAmount] = useState("");
+  const [retCarrier, setRetCarrier] = useState("");
+  const [retTrack, setRetTrack] = useState("");
   const { data = [] } = useQuery({ queryKey: ["dispute-msgs", dispute.id], queryFn: async () => (await supabase.from("dispute_messages").select("*").eq("dispute_id", dispute.id).order("created_at")).data ?? [] });
   const refresh = () => qc.invalidateQueries();
   const reply = async (escalate = false) => { if (err((await supabase.rpc("reply_dispute", { _dispute_id: dispute.id, _body: body || "Solicito mediação da PokePlace.", _escalate: escalate })).error, "Enviado")) { setBody(""); refresh(); } };
+  const submitReturn = async () => {
+    const res = await (supabase as unknown as {
+      rpc: (fn: string, args: Record<string, unknown>) => Promise<{ error: { message: string } | null }>;
+    }).rpc("submit_dispute_return", { _dispute_id: dispute.id, _carrier: retCarrier, _tracking: retTrack });
+    if (err(res.error, "Rastreio da devolução registrado")) {
+      setRetCarrier("");
+      setRetTrack("");
+      refresh();
+    }
+  };
   const resolve = async (outcome: string) => {
     try {
       await resolveDispute({ data: { disputeId: dispute.id, outcome, amount: amount ? Number(amount) : 0, note: body || "Decisão da mediação" } });
@@ -173,10 +207,25 @@ export function DisputeThread({ dispute, role }: { dispute: { id: string; status
   const done = dispute.status.startsWith("resolved");
   return (
     <div className="space-y-2 rounded border border-destructive/30 p-3 text-sm">
-      <p><b>Problema:</b> {DISPUTE_REASON[dispute.reason]} · <b>{DISPUTE_STATUS[dispute.status]}</b></p>
+      <p><b>Problema:</b> {DISPUTE_REASON[dispute.reason] ?? dispute.reason} · <b>{DISPUTE_STATUS[dispute.status]}</b></p>
       {dispute.status === "open" && <p className="text-xs text-muted-foreground">A loja tem até {new Date(dispute.seller_deadline).toLocaleString("pt-BR")} para responder.</p>}
+      {dispute.return_tracking_code && (
+        <p className="rounded bg-muted px-2.5 py-1.5 text-xs">
+          <b>Devolução postada:</b> {dispute.return_carrier} · <span className="num font-semibold">{dispute.return_tracking_code}</span>
+        </p>
+      )}
       {done && <p className="text-xs">Decisão: {dispute.resolution_note} {Number(dispute.resolution_amount) > 0 && `· ${money(Number(dispute.resolution_amount))}`}</p>}
       <div className="max-h-56 space-y-1 overflow-auto">{data.map((m) => <p key={m.id} className="rounded bg-muted p-2"><span className="text-[11px] text-muted-foreground">{new Date(m.created_at).toLocaleString("pt-BR")}</span><br />{m.body}</p>)}</div>
+      {!done && role === "buyer" && !dispute.return_tracking_code && (
+        <div className="rounded border border-border bg-muted/40 p-2.5">
+          <p className="text-xs font-medium">Devolvendo a carta? Informe o código de rastreio da postagem:</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <input value={retCarrier} onChange={(e) => setRetCarrier(e.target.value)} placeholder="Transportadora (ex: Correios)" className="flex-1 rounded border border-input bg-background px-2.5 py-1.5 text-xs" />
+            <input value={retTrack} onChange={(e) => setRetTrack(e.target.value)} placeholder="Código de rastreio" className="flex-1 rounded border border-input bg-background px-2.5 py-1.5 text-xs" />
+            <Button size="sm" variant="outline" onClick={submitReturn} disabled={retCarrier.trim().length < 2 || retTrack.trim().length < 3}>Registrar devolução</Button>
+          </div>
+        </div>
+      )}
       {!done && <>
         <textarea value={body} onChange={(e) => setBody(e.target.value)} maxLength={4000} className={f} placeholder={role === "admin" ? "Justificativa da decisão" : "Sua mensagem"} />
         <div className="flex flex-wrap gap-2">

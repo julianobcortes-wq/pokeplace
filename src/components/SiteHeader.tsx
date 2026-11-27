@@ -85,6 +85,7 @@ export function SiteHeader() {
         <nav className="hidden items-center gap-1 text-sm lg:flex">
           <Link to="/" className={nav} activeOptions={{ exact: true }}>Marketplace</Link>
           <Link to="/colecoes" className={nav}>Coleções</Link>
+          <Link to="/ranking" className={nav}>Ranking</Link>
           <Link to="/vender" className={nav}>Vender</Link>
           <Link to="/colecao" className={nav}>Meu acervo</Link>
           {roles.includes("seller") && <Link to="/minha-loja" className={nav}>Minha loja</Link>}
@@ -122,7 +123,7 @@ export function PageShell({ children }: { children: React.ReactNode }) {
       <footer className="grain mt-20 bg-ink-glow text-ink-foreground">
         <div className="mx-auto flex max-w-7xl flex-wrap items-start justify-between gap-6 px-4 py-10 text-sm">
           <div><Logo imgClass="h-12" /><p className="mt-2 max-w-sm opacity-60">{BRAND.tagline}.</p></div>
-          <nav aria-label="Ajuda" className="flex flex-wrap gap-4"><Link to="/compra-garantida">Compra Garantida</Link><Link to="/seguranca">Segurança</Link><Link to="/termos">Termos</Link><Link to="/privacidade">Privacidade</Link><Link to="/regras-vendedor">Regras para lojas</Link><Link to="/canais" search={{ seller: "loja-local" }}>Canais</Link><Link to="/atendimento">Atendimento</Link><Link to="/colecao">Minha coleção</Link><Link to="/planos">Planos</Link><Link to="/vender">Vender</Link></nav>
+          <nav aria-label="Ajuda" className="flex flex-wrap gap-4"><Link to="/ranking">Ranking</Link><Link to="/compra-garantida">Compra Garantida</Link><Link to="/seguranca">Segurança</Link><Link to="/termos">Termos</Link><Link to="/privacidade">Privacidade</Link><Link to="/regras-vendedor">Regras para lojas</Link><Link to="/canais" search={{ seller: "loja-local" }}>Canais</Link><Link to="/atendimento">Atendimento</Link><Link to="/colecao">Minha coleção</Link><Link to="/planos">Planos</Link><Link to="/vender">Vender</Link></nav>
           <p className="max-w-md text-xs opacity-50">Catálogo baseado em dados abertos (PokemonTCG/pokemon-tcg-data). Pokémon e nomes relacionados são marcas de seus respectivos donos.</p>
         </div>
       </footer>

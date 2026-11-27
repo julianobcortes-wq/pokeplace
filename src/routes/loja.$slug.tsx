@@ -1,12 +1,13 @@
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 import { useState } from "react";
-import { CalendarDays, MapPin, MessageSquareReply, Package, RotateCcw, Truck } from "lucide-react";
+import { CalendarDays, Clock, MapPin, MessageSquareReply, Package, RotateCcw, Truck } from "lucide-react";
 import { MarketplaceImage } from "@/components/MarketplaceImage";
 import { PageShell } from "@/components/SiteHeader";
 import { Slab, useTrends } from "@/components/CardGrid";
-import { ReputationMeter, Stars, StoreAvatar, VerifiedPill, SellerTrustPanel } from "@/components/market";
+import { MedalBadge, ReputationMeter, Stars, StoreAvatar, VerifiedPill, SellerTrustPanel } from "@/components/market";
 import { getStore } from "@/lib/catalog.functions";
 import { BRAND, money } from "@/lib/format";
+import { formatResponseTime, type ThermometerLevel } from "@/lib/marketplace/rules";
 
 export const Route = createFileRoute("/loja/$slug")({
   loader: async ({ params }) => {
@@ -30,7 +31,7 @@ export const Route = createFileRoute("/loja/$slug")({
 });
 
 function StorePage() {
-  const { store, reputation: rep, listings, reviews } = Route.useLoaderData();
+  const { store, reputation: rep, thermometer: thermo, listings, reviews } = Route.useLoaderData();
   const [q, setQ] = useState("");
   const [tab, setTab] = useState<"cartas" | "avaliacoes" | "sobre">("cartas");
   const trends = useTrends(listings.slice(0, 120).map((l) => l.card_id));
@@ -38,7 +39,7 @@ function StorePage() {
   const level = rep?.level ?? "nova";
   const shown = listings.filter((l) => !q || l.cards?.name.toLowerCase().includes(q.toLowerCase()));
   const avg = (k: "rating_service" | "rating_packaging" | "rating_shipping") => Number(k === "rating_service" ? rep?.service_rating ?? 0 : k === "rating_packaging" ? rep?.packaging_rating ?? 0 : rep?.shipping_rating ?? 0);
-  const cancelRate = Number(rep?.total_items ?? 0) ? (Number(rep?.cancelled ?? 0) / Number(rep?.total_items)) * 100 : 0;
+  const cancelRate = thermo ? thermo.cancel_rate : Number(rep?.total_items ?? 0) ? (Number(rep?.cancelled ?? 0) / Number(rep?.total_items)) * 100 : 0;
 
   return (
     <PageShell>
@@ -49,19 +50,26 @@ function StorePage() {
           <div className="flex flex-wrap items-end gap-5">
             <StoreAvatar name={store.store_name} logo={store.logo_url} size="h-24 w-24 text-2xl ring-4 ring-ink-foreground/10" />
             <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2"><VerifiedPill />{store.is_official && <span className="rounded-full bg-primary px-2 py-0.5 text-[11px] font-semibold text-primary-foreground">Oficial</span>}</div>
+              <div className="flex flex-wrap items-center gap-2">
+                <VerifiedPill />
+                {store.is_official && <span className="rounded-full bg-primary px-2 py-0.5 text-[11px] font-semibold text-primary-foreground">Oficial</span>}
+                {thermo && <MedalBadge medal={thermo.medal} />}
+              </div>
               <h1 className="mt-2 text-4xl font-extrabold md:text-5xl">{store.store_name}</h1>
               <p className="mt-2 flex flex-wrap gap-4 text-sm opacity-70">
                 <span className="inline-flex items-center gap-1"><MapPin className="h-4 w-4" />{store.city}/{store.state}</span>
                 <span className="inline-flex items-center gap-1"><CalendarDays className="h-4 w-4" />Na plataforma desde {new Date(store.created_at).toLocaleDateString("pt-BR", { month: "long", year: "numeric" })}</span>
+                {thermo?.avg_response_hours != null && (
+                  <span className="inline-flex items-center gap-1"><Clock className="h-4 w-4" />{formatResponseTime(thermo.avg_response_hours)}</span>
+                )}
               </p>
             </div>
           </div>
           <div className="mt-8 grid grid-cols-2 gap-3 md:grid-cols-4">
             <Metric l="Avaliação" v={nReviews ? <span className="inline-flex items-center gap-2">{rating.toFixed(1)} <Stars value={rating} /></span> : "—"} sub={`${nReviews} avaliações`} />
-            <Metric l="Vendas concluídas" v={String(rep?.completed_sales ?? 0)} sub="itens entregues" />
-            <Metric l="Cancelamentos" v={Number(rep?.total_items ?? 0) ? `${cancelRate.toFixed(0)}%` : "—"} sub="dos itens vendidos" />
-            <div className="rounded-2xl border border-ink-foreground/10 bg-ink-foreground/5 p-4"><p className="text-xs opacity-60">Reputação</p><div className="mt-2"><ReputationMeter level={level} /></div></div>
+            <Metric l="Vendas concluídas" v={String(rep?.completed_sales ?? 0)} sub={thermo ? `${thermo.on_time_rate.toFixed(0)}% envios no prazo` : "itens entregues"} />
+            <Metric l="Cancelamentos" v={Number(rep?.total_items ?? 0) ? `${cancelRate.toFixed(0)}%` : "—"} sub={thermo ? `${thermo.claim_rate.toFixed(1)}% reclamações` : "dos itens vendidos"} />
+            <div className="rounded-2xl border border-ink-foreground/10 bg-ink-foreground/5 p-4"><p className="text-xs opacity-60">Termômetro</p><div className="mt-2"><ReputationMeter level={level} thermometer={thermo?.thermometer as ThermometerLevel | undefined} /></div></div>
           </div>
         </div>
       </section>
