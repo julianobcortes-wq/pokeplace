@@ -1,6 +1,8 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { getLaunchReadiness } from "@/lib/ops/readiness";
 import { sanitizeSetIds, verifyCronBearer } from "@/lib/ops/sync-runner";
+import server from "@/server";
 
 describe("Launch readiness & ops helpers", () => {
   const prevCron = process.env["CRON_SECRET"];
@@ -58,5 +60,40 @@ describe("Launch readiness & ops helpers", () => {
       "swsh7",
       "sv8",
     ]);
+  });
+
+  it("hides internal operational checks on unauthenticated GET /api/health", async () => {
+    process.env["CRON_SECRET"] = "health-secret-xyz";
+    const pubRes = await server.fetch(new Request("https://example.com/api/health"), {}, {});
+    expect(pubRes.status).toBe(200);
+    expect(await pubRes.json()).toEqual({ ok: true });
+
+    const authedRes = await server.fetch(
+      new Request("https://example.com/api/health", {
+        headers: { Authorization: "Bearer health-secret-xyz" },
+      }),
+      {},
+      {},
+    );
+    expect(authedRes.status).toBe(200);
+    const body = (await authedRes.json()) as { ok: boolean; checks?: Record<string, boolean> };
+    expect(body.ok).toBe(true);
+    expect(body.checks).toBeDefined();
+  });
+
+  it("creates the marketplace-media storage bucket in all-migrations.sql", () => {
+    const sql = readFileSync("scripts/sql/all-migrations.sql", "utf8");
+    const bucketIdx = sql.indexOf("INSERT INTO storage.buckets");
+    const policyIdx = sql.indexOf("CREATE POLICY marketplace_media_insert");
+    expect(bucketIdx).toBeGreaterThan(-1);
+    expect(policyIdx).toBeGreaterThan(bucketIdx);
+    expect(sql).toContain("'marketplace-media'");
+  });
+
+  it("does not fall back to direct orders/payments updates when confirm_live_payment fails", () => {
+    const webhookSrc = readFileSync("src/lib/payments/webhook.ts", "utf8");
+    expect(webhookSrc).toContain('confirm_live_payment');
+    expect(webhookSrc).not.toContain('.from("orders").update');
+    expect(webhookSrc).not.toContain('.from("payments").insert');
   });
 });

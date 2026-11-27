@@ -198,8 +198,19 @@ export const marketStats = createServerFn({ method: "GET" }).handler(async () =>
   }
 });
 
+const trendCache = new Map<string, { at: number; value: TrendSummary | null }>();
+const trendInFlight = new Map<string, Promise<TrendSummary | null>>();
+const TREND_CACHE_TTL = 15 * 60 * 1000;
+const MAX_TREND_IDS = 30;
+const MAX_UNCACHED_EXTERNAL_QUOTES = 16;
+
 export const getTrends = createServerFn({ method: "GET" })
-  .inputValidator((d: { ids: string[] }) => ({ ids: d.ids.slice(0, 40) }))
+  .inputValidator((d: { ids: string[] }) => ({
+    ids: [...new Set((d.ids ?? []).map((id) => id.trim()).filter((id) => /^[a-z0-9._-]{2,48}$/i.test(id)))].slice(
+      0,
+      MAX_TREND_IDS,
+    ),
+  }))
   .handler(async ({ data }) => {
     const out: Record<string, TrendSummary> = {};
     if (!data.ids.length) return out;
@@ -225,25 +236,56 @@ export const getTrends = createServerFn({ method: "GET" })
       }
     }
 
-    const missing = data.ids.filter((id) => !out[id]?.points?.length).slice(0, 40);
-    if (missing.length) {
+    const now = Date.now();
+    const uncachedMissing: string[] = [];
+    for (const id of data.ids) {
+      if (out[id]?.points?.length) continue;
+      const hit = trendCache.get(id);
+      if (hit && now - hit.at < TREND_CACHE_TTL) {
+        if (hit.value) out[id] = hit.value;
+        continue;
+      }
+      uncachedMissing.push(id);
+    }
+
+    const batch = uncachedMissing.slice(0, MAX_UNCACHED_EXTERNAL_QUOTES);
+    if (batch.length) {
       const [{ quoteCard }, { buildReferenceSeries, seriesToTrend }, { getFxRates, fxRateToBrl }] = await Promise.all([
         import("@/lib/pricing/quote"),
         import("@/lib/pricing/series"),
         import("@/lib/pricing/fx"),
       ]);
       const fx = await getFxRates();
-      const concurrency = 8;
+      const fetchOne = (id: string): Promise<TrendSummary | null> => {
+        const inflight = trendInFlight.get(id);
+        if (inflight) return inflight;
+        const job = (async () => {
+          try {
+            const q = await quoteCard(id);
+            const mult = fxRateToBrl(q.currency, fx);
+            const trend = seriesToTrend(
+              buildReferenceSeries(q, 90, undefined, { currency: "BRL", multiplier: mult }),
+              "BRL",
+            );
+            trendCache.set(id, { at: Date.now(), value: trend });
+            return trend;
+          } finally {
+            trendInFlight.delete(id);
+          }
+        })();
+        trendInFlight.set(id, job);
+        return job;
+      };
+
+      const concurrency = 4;
       let cursor = 0;
-      const workers = Array.from({ length: Math.min(concurrency, missing.length) }, async () => {
-        while (cursor < missing.length) {
+      const workers = Array.from({ length: Math.min(concurrency, batch.length) }, async () => {
+        while (cursor < batch.length) {
           const idx = cursor++;
-          const id = missing[idx];
+          const id = batch[idx];
           if (!id) continue;
-          const q = await quoteCard(id);
-          const mult = fxRateToBrl(q.currency, fx);
-          const trend = seriesToTrend(buildReferenceSeries(q, 90, undefined, { currency: "BRL", multiplier: mult }), "BRL");
-          if (trend) out[q.cardId] = trend;
+          const trend = await fetchOne(id);
+          if (trend) out[id] = trend;
         }
       });
       await Promise.all(workers);

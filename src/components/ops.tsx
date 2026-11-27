@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { money } from "@/lib/format";
 import { safeNotificationHref } from "@/lib/safe-url";
 import { isSupabaseConfigured } from "@/lib/runtime-config";
+import { getPaymentOptions } from "@/lib/payments/functions";
 import { processPayout, requestSellerPayout, resolveDispute, reviewReport, setPlatformSetting } from "@/lib/guard.functions";
 
 const f = "w-full rounded-md border border-input bg-background px-3 py-2 text-sm";
@@ -100,6 +101,12 @@ type Item = { id: string; status: string; seller_id: string; delivered_at: strin
 export function OrderBuyerActions({ order, items }: { order: { id: string; status: string; expires_at: string | null }; items: Item[]; sandbox?: boolean }) {
   const qc = useQueryClient();
   const [paying, setPaying] = useState(false);
+  const { data: payOpts } = useQuery({
+    queryKey: ["payment-options"],
+    queryFn: () => getPaymentOptions(),
+    staleTime: 60_000,
+    enabled: order.status === "awaiting_payment",
+  });
   const refresh = () => qc.invalidateQueries({ queryKey: ["order"] });
   const payMercadoPago = async () => {
     setPaying(true);
@@ -114,13 +121,21 @@ export function OrderBuyerActions({ order, items }: { order: { id: string; statu
   };
   const cancel = async () => { if (!confirm("Cancelar este pedido? As cartas voltam para as lojas.")) return; if (err((await supabase.rpc("cancel_order", { _order_id: order.id })).error, "Pedido cancelado")) refresh(); };
   const canCancel = ["awaiting_payment", "paid"].includes(order.status) && items.every((i) => i.status === "pending");
+  const mpReady = payOpts?.mercadoPago ?? true;
   return (
-    <div className="mt-4 flex flex-wrap items-center gap-2">
-      {order.status === "awaiting_payment" && (
-        <Button onClick={payMercadoPago} disabled={paying}>{paying ? "Abrindo Mercado Pago…" : "Pagar com Mercado Pago"}</Button>
+    <div className="mt-4 space-y-2.5">
+      {order.status === "awaiting_payment" && !mpReady && (
+        <div className="rounded-xl border border-primary/25 bg-primary/5 p-3 text-xs text-foreground">
+          <b>Pagamento via Mercado Pago em ativação.</b> Seu pedido e a reserva de estoque foram registrados corretamente. Assim que o meio de pagamento estiver habilitado, o botão de pagar aparecerá aqui.
+        </div>
       )}
-      {order.status === "awaiting_payment" && order.expires_at && <p className="text-xs text-muted-foreground">Cartas reservadas até {new Date(order.expires_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}. Sem pagamento, voltam para a vitrine.</p>}
-      {canCancel && <Button variant="outline" onClick={cancel}>Cancelar pedido</Button>}
+      <div className="flex flex-wrap items-center gap-2">
+        {order.status === "awaiting_payment" && mpReady && (
+          <Button onClick={payMercadoPago} disabled={paying}>{paying ? "Abrindo Mercado Pago…" : "Pagar com Mercado Pago"}</Button>
+        )}
+        {order.status === "awaiting_payment" && order.expires_at && <p className="text-xs text-muted-foreground">Cartas reservadas até {new Date(order.expires_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}. Sem pagamento, voltam para a vitrine.</p>}
+        {canCancel && <Button variant="outline" onClick={cancel}>Cancelar pedido</Button>}
+      </div>
     </div>
   );
 }

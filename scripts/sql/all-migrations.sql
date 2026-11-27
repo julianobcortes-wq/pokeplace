@@ -568,6 +568,9 @@ CREATE OR REPLACE FUNCTION public.protect_order_item_integrity() RETURNS trigger
  ELSIF NEW.status='delivered' AND OLD.status='shipped' AND public.is_order_buyer(OLD.order_id) THEN NEW.delivered_at=now();
  ELSE RAISE EXCEPTION 'Transição inválida: somente o comprador confirma recebimento após envio'; END IF; END IF; RETURN NEW; END $$;
 ALTER TABLE public.listings ADD COLUMN photo_paths text[] NOT NULL DEFAULT '{}';
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES ('marketplace-media', 'marketplace-media', false, 5242880, ARRAY['image/jpeg', 'image/png', 'image/webp'])
+ON CONFLICT (id) DO NOTHING;
 CREATE POLICY marketplace_media_insert ON storage.objects FOR INSERT TO authenticated WITH CHECK(bucket_id='marketplace-media' AND public.owns_seller((storage.foldername(name))[1]::uuid) AND lower(storage.extension(name)) IN ('jpg','jpeg','png','webp'));
 CREATE POLICY marketplace_media_read ON storage.objects FOR SELECT TO anon,authenticated USING(bucket_id='marketplace-media' AND (public.is_approved_seller((storage.foldername(name))[1]::uuid) OR public.owns_seller((storage.foldername(name))[1]::uuid) OR public.has_role(auth.uid(),'admin')));
 CREATE POLICY marketplace_media_delete ON storage.objects FOR DELETE TO authenticated USING(bucket_id='marketplace-media' AND public.owns_seller((storage.foldername(name))[1]::uuid));

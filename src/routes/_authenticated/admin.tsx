@@ -9,7 +9,7 @@ import { SupportInbox } from "@/components/SupportInbox";
 import { PageShell } from "@/components/SiteHeader";
 import { useAuth } from "@/hooks/useAuth";
 import { listAdminSellers, setPlatformSetting, setSellerStatus } from "@/lib/guard.functions";
-import { getAdminReadiness, runAdminCatalogImport, runAdminPriceSync } from "@/lib/ops/ops.functions";
+import { getAdminReadiness, runAdminCatalogImport, runAdminPriceSync, runAdminSeedCatalog } from "@/lib/ops/ops.functions";
 import { BRAND, SELLER_STATUS, money } from "@/lib/format";
 import type { Database as Db } from "@/integrations/supabase/types";
 
@@ -140,6 +140,19 @@ function LaunchReadinessPanel() {
     }
   };
 
+  const runSeedFull = async () => {
+    setBusy("seed-full");
+    try {
+      const res = await runAdminSeedCatalog();
+      toast.success(`Catálogo completo importado: ${res.importedSets} coleções e ${res.importedCards} cartas`);
+      await qc.invalidateQueries({ queryKey: ["admin-readiness"] });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Erro ao importar catálogo completo");
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const runPrices = async () => {
     setBusy("prices");
     try {
@@ -168,6 +181,10 @@ function LaunchReadinessPanel() {
       ] as const
     : [];
 
+  const coreReadyWithoutPayment = Boolean(
+    r?.checks.supabasePublic && r?.checks.supabaseAdmin && r?.checks.schemaApplied && r?.checks.catalogSeeded,
+  );
+
   return (
     <section className="rounded-2xl border border-border bg-card p-5 shadow-slab">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -178,10 +195,18 @@ function LaunchReadinessPanel() {
         {r && (
           <span
             className={`rounded-full px-3 py-1 text-xs font-semibold ${
-              r.ready ? "bg-success/15 text-success" : "bg-chart-4/20 text-foreground"
+              r.ready
+                ? "bg-success/15 text-success"
+                : coreReadyWithoutPayment
+                  ? "bg-primary/15 text-primary"
+                  : "bg-chart-4/20 text-foreground"
             }`}
           >
-            {r.ready ? "Pronto para operar" : "Pendências externas"}
+            {r.ready
+              ? "Pronto para operar"
+              : coreReadyWithoutPayment
+                ? "Core pronto · pagamento pendente"
+                : "Pendências externas"}
           </span>
         )}
       </div>
@@ -209,6 +234,14 @@ function LaunchReadinessPanel() {
           </div>
 
           <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-border pt-4">
+            <Button
+              size="sm"
+              disabled={busy !== null || !r?.checks.schemaApplied}
+              onClick={runSeedFull}
+            >
+              <Database className="h-3.5 w-3.5" />
+              {busy === "seed-full" ? "Importando 3.864 cartas…" : "Importar catálogo completo (22 coleções · 3.864 cartas)"}
+            </Button>
             {IMPORT_BATCHES.map((b) => (
               <Button
                 key={b.label}

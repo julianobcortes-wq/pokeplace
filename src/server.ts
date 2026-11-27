@@ -52,6 +52,14 @@ export default {
     try {
       const url = new URL(request.url);
       if (url.pathname === "/api/health" && request.method === "GET") {
+        const { verifyCronBearer } = await import("./lib/ops/sync-runner");
+        const auth = verifyCronBearer(request);
+        if (!auth.ok) {
+          return new Response(JSON.stringify({ ok: true }), {
+            status: 200,
+            headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+          });
+        }
         const { getLaunchReadiness } = await import("./lib/ops/readiness");
         const report = await getLaunchReadiness();
         return new Response(JSON.stringify(report), {

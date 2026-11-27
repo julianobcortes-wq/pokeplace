@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { getLaunchReadiness } from "./readiness";
-import { importCatalogBatch, syncPricesBatch } from "./sync-runner";
+import { importCatalogBatch, importSeededCatalog, syncPricesBatch } from "./sync-runner";
 
 type Authed = {
   supabase: { from: (table: string) => any };
@@ -36,6 +36,13 @@ export const runAdminCatalogImport = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     return importCatalogBatch(data.setIds);
+  });
+
+export const runAdminSeedCatalog = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    await assertAdmin(context);
+    return importSeededCatalog();
   });
 
 export const runAdminPriceSync = createServerFn({ method: "POST" })

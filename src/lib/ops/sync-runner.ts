@@ -1,3 +1,4 @@
+import { localAllCards, localSets } from "@/lib/catalog/local";
 import { parseTcgdexCardPricing, tcgdexCandidateIds } from "@/lib/pricing/quote";
 
 export const DEFAULT_CATALOG_SETS = [
@@ -115,6 +116,47 @@ export async function importCatalogBatch(rawSetIds: string[]): Promise<{
   }
 
   return { importedSets, importedCards, skipped };
+}
+
+export async function importSeededCatalog(): Promise<{
+  importedSets: number;
+  importedCards: number;
+}> {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const sets = localSets();
+  const cards = localAllCards();
+
+  const setRows = sets.map((s) => ({
+    id: s.id,
+    name: s.name,
+    series: s.series,
+    total: s.total,
+    release_date: s.release_date,
+    symbol_url: s.symbol_url,
+    logo_url: s.logo_url,
+  }));
+  const { error: setErr } = await supabaseAdmin.from("card_sets").upsert(setRows, { onConflict: "id" });
+  if (setErr) throw new Error(`card_sets: ${setErr.message}`);
+
+  for (let i = 0; i < cards.length; i += 200) {
+    const chunk = cards.slice(i, i + 200).map((c) => ({
+      id: c.id,
+      set_id: c.set_id,
+      name: c.name,
+      number: c.number,
+      rarity: c.rarity,
+      supertype: c.supertype,
+      subtypes: c.subtypes ?? [],
+      types: c.types ?? [],
+      artist: c.artist,
+      image_small: c.image_small,
+      image_large: c.image_large,
+    }));
+    const { error: cardErr } = await supabaseAdmin.from("cards").upsert(chunk, { onConflict: "id" });
+    if (cardErr) throw new Error(`cards (batch ${i}): ${cardErr.message}`);
+  }
+
+  return { importedSets: sets.length, importedCards: cards.length };
 }
 
 export async function syncPricesBatch(limit = 25): Promise<{
