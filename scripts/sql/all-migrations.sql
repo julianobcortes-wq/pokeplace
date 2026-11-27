@@ -2587,6 +2587,160 @@ BEGIN
 END $$;
 GRANT EXECUTE ON FUNCTION public.admin_review_strike_appeal(uuid, text, text) TO authenticated;
 
+-- ============================================================
+-- 0018_portfolio_alerts_public_share.sql
+-- Portfolio cost basis / condition, price alerts, and LGPD opt-in public share
+-- ============================================================
+ALTER TABLE public.collection_entries
+  ADD COLUMN IF NOT EXISTS purchase_price numeric(10,2) CHECK (purchase_price IS NULL OR purchase_price >= 0),
+  ADD COLUMN IF NOT EXISTS condition text NOT NULL DEFAULT 'NM',
+  ADD COLUMN IF NOT EXISTS purchased_at date,
+  ADD COLUMN IF NOT EXISTS notes text;
+
+ALTER TABLE public.profiles
+  ADD COLUMN IF NOT EXISTS collection_public_opt_in boolean NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS collection_share_slug text;
+
+CREATE UNIQUE INDEX IF NOT EXISTS profiles_collection_share_slug_uidx
+  ON public.profiles (lower(collection_share_slug))
+  WHERE collection_share_slug IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS public.price_alerts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  card_id text NOT NULL REFERENCES public.cards(id) ON DELETE CASCADE,
+  direction text NOT NULL DEFAULT 'below' CHECK (direction IN ('below', 'above')),
+  target_brl numeric(10,2) NOT NULL CHECK (target_brl > 0 AND target_brl <= 999999),
+  active boolean NOT NULL DEFAULT true,
+  last_triggered_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS price_alerts_user_idx ON public.price_alerts (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS price_alerts_active_idx ON public.price_alerts (card_id) WHERE active = true;
+
+ALTER TABLE public.price_alerts ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "price_alerts_own" ON public.price_alerts;
+CREATE POLICY "price_alerts_own" ON public.price_alerts
+  FOR ALL TO authenticated
+  USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
+
+-- Public opt-in collection reader (LGPD safe: returns only display name + owned cards, never cost basis or emails)
+CREATE OR REPLACE FUNCTION public.get_public_collection(_slug text)
+RETURNS TABLE(
+  owner_name text,
+  share_slug text,
+  card_id text,
+  quantity int,
+  condition text,
+  card_name text,
+  card_number text,
+  image_small text,
+  set_name text,
+  ref_price_brl numeric
+)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  WITH owner_profile AS (
+    SELECT p.id, coalesce(nullif(trim(p.display_name), ''), 'Colecionador PokePlace') AS owner_name, lower(p.collection_share_slug) AS share_slug
+    FROM public.profiles p
+    WHERE p.collection_public_opt_in = true
+      AND lower(p.collection_share_slug) = lower(trim(_slug))
+    LIMIT 1
+  )
+  SELECT
+    op.owner_name,
+    op.share_slug,
+    ce.card_id,
+    ce.quantity,
+    ce.condition,
+    c.name AS card_name,
+    c.number AS card_number,
+    c.image_small,
+    cs.name AS set_name,
+    coalesce(
+      (SELECT po.amount FROM public.price_observations po WHERE po.card_id = ce.card_id AND po.currency = 'BRL' ORDER BY po.observed_at DESC LIMIT 1),
+      (SELECT min(l.price) FROM public.listings l WHERE l.card_id = ce.card_id AND l.status = 'active' AND l.quantity > 0)
+    ) AS ref_price_brl
+  FROM owner_profile op
+  JOIN public.collection_entries ce ON ce.user_id = op.id AND ce.kind = 'owned'
+  JOIN public.cards c ON c.id = ce.card_id
+  LEFT JOIN public.card_sets cs ON cs.id = c.set_id
+  ORDER BY cs.name NULLS LAST, c.name;
+$$;
+GRANT EXECUTE ON FUNCTION public.get_public_collection(text) TO anon, authenticated;
+
+-- Cron helper (service_role only): evaluates active price alerts against latest BRL observation or lowest active offer
+CREATE OR REPLACE FUNCTION public.evaluate_price_alerts()
+RETURNS TABLE(
+  alert_id uuid,
+  user_id uuid,
+  card_id text,
+  card_name text,
+  direction text,
+  target_brl numeric,
+  current_price numeric
+)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  rec record;
+BEGIN
+  IF coalesce(current_setting('request.jwt.claim.role', true), '') <> 'service_role' THEN
+    RAISE EXCEPTION 'Acesso restrito ao servidor';
+  END IF;
+
+  FOR rec IN
+    WITH latest_prices AS (
+      SELECT DISTINCT ON (pa.card_id)
+        pa.card_id,
+        coalesce(
+          (SELECT po.amount FROM public.price_observations po WHERE po.card_id = pa.card_id AND po.currency = 'BRL' ORDER BY po.observed_at DESC LIMIT 1),
+          (SELECT min(l.price) FROM public.listings l WHERE l.card_id = pa.card_id AND l.status = 'active' AND l.quantity > 0)
+        ) AS cur_brl
+      FROM public.price_alerts pa
+      WHERE pa.active = true
+    )
+    SELECT
+      pa.id AS alert_id,
+      pa.user_id,
+      pa.card_id,
+      c.name AS card_name,
+      pa.direction,
+      pa.target_brl,
+      lp.cur_brl AS current_price
+    FROM public.price_alerts pa
+    JOIN latest_prices lp ON lp.card_id = pa.card_id
+    JOIN public.cards c ON c.id = pa.card_id
+    WHERE pa.active = true
+      AND lp.cur_brl IS NOT NULL
+      AND (pa.last_triggered_at IS NULL OR pa.last_triggered_at < now() - interval '24 hours')
+      AND (
+        (pa.direction = 'below' AND lp.cur_brl <= pa.target_brl) OR
+        (pa.direction = 'above' AND lp.cur_brl >= pa.target_brl)
+      )
+    LIMIT 100
+  LOOP
+    UPDATE public.price_alerts SET last_triggered_at = now() WHERE id = rec.alert_id;
+    PERFORM public.notify(
+      rec.user_id,
+      'Alerta de preço: ' || rec.card_name,
+      'Cotação atual em R$ ' || to_char(rec.current_price, 'FM999990D00') || ' (meta ' || CASE WHEN rec.direction = 'below' THEN 'abaixo de ' ELSE 'acima de ' END || 'R$ ' || to_char(rec.target_brl, 'FM999990D00') || ').',
+      '/carta/' || rec.card_id
+    );
+    alert_id := rec.alert_id;
+    user_id := rec.user_id;
+    card_id := rec.card_id;
+    card_name := rec.card_name;
+    direction := rec.direction;
+    target_brl := rec.target_brl;
+    current_price := rec.current_price;
+    RETURN NEXT;
+  END LOOP;
+END $$;
+REVOKE ALL ON FUNCTION public.evaluate_price_alerts() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.evaluate_price_alerts() TO service_role;
+
+
 
 
 

@@ -1,10 +1,11 @@
-import { buildDeliveryWarningEmail, sendTransactionalEmail } from "@/lib/notify/email";
+import { buildDeliveryWarningEmail, buildPriceAlertEmail, sendTransactionalEmail } from "@/lib/notify/email";
 
 export type OrdersMaintenanceSummary = {
   expiredOrdersRan: boolean;
   expiredOffersCount: number;
   autoConfirmedDeliveriesCount: number;
   deliveryWarningsSent: number;
+  priceAlertsTriggered: number;
   notes: string[];
 };
 
@@ -27,6 +28,7 @@ export async function runOrdersMaintenance(): Promise<OrdersMaintenanceSummary> 
     expiredOffersCount: 0,
     autoConfirmedDeliveriesCount: 0,
     deliveryWarningsSent: 0,
+    priceAlertsTriggered: 0,
     notes: [],
   };
 
@@ -60,6 +62,42 @@ export async function runOrdersMaintenance(): Promise<OrdersMaintenanceSummary> 
         /* never abort maintenance loop on individual notification error */
       }
     }
+  }
+
+  const alertsRes = await adminRpc<
+    Array<{
+      alert_id: string;
+      user_id: string;
+      card_id: string;
+      card_name: string;
+      direction: string;
+      target_brl: number;
+      current_price: number;
+    }>
+  >("evaluate_price_alerts");
+  if (!alertsRes.error && Array.isArray(alertsRes.data)) {
+    for (const row of alertsRes.data) {
+      summary.priceAlertsTriggered++;
+      try {
+        const { data: userRes } = await supabaseAdmin.auth.admin.getUserById(row.user_id);
+        const email = userRes?.user?.email;
+        if (!email) continue;
+        await sendTransactionalEmail(
+          buildPriceAlertEmail({
+            to: email,
+            cardName: row.card_name,
+            currentBrl: Number(row.current_price),
+            thresholdBrl: Number(row.target_brl),
+            direction: row.direction === "above" ? "above" : "below",
+            cardUrl: `/carta/${row.card_id}`,
+          }),
+        );
+      } catch {
+        /* keep loop resilient */
+      }
+    }
+  } else if (alertsRes.error) {
+    summary.notes.push(`evaluate_price_alerts: ${alertsRes.error.message}`);
   }
 
   return summary;

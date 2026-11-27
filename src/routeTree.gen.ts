@@ -28,6 +28,7 @@ import { Route as AuthenticatedAtendimentoRouteImport } from './routes/_authenti
 import { Route as AuthenticatedColecaoRouteImport } from './routes/_authenticated/colecao'
 import { Route as AuthenticatedContaRouteImport } from './routes/_authenticated/conta'
 import { Route as AuthenticatedMinhaLojaRouteImport } from './routes/_authenticated/minha-loja'
+import { Route as AcervoSlugRouteImport } from './routes/acervo.$slug'
 import { Route as CartaCardIdRouteImport } from './routes/carta.$cardId'
 import { Route as ColecoesIndexRouteImport } from './routes/colecoes.index'
 import { Route as ColecoesSetIdRouteImport } from './routes/colecoes.$setId'
@@ -130,6 +131,11 @@ const AuthenticatedMinhaLojaRoute = AuthenticatedMinhaLojaRouteImport.update({
   path: '/minha-loja',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const AcervoSlugRoute = AcervoSlugRouteImport.update({
+  id: '/acervo/$slug',
+  path: '/acervo/$slug',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const CartaCardIdRoute = CartaCardIdRouteImport.update({
   id: '/carta/$cardId',
   path: '/carta/$cardId',
@@ -182,6 +188,7 @@ export interface FileRoutesByFullPath {
   '/colecao': typeof AuthenticatedColecaoRoute
   '/conta': typeof AuthenticatedContaRoute
   '/minha-loja': typeof AuthenticatedMinhaLojaRoute
+  '/acervo/$slug': typeof AcervoSlugRoute
   '/carta/$cardId': typeof CartaCardIdRoute
   '/colecoes/$setId': typeof ColecoesSetIdRoute
   '/loja/$slug': typeof LojaSlugRoute
@@ -208,6 +215,7 @@ export interface FileRoutesByTo {
   '/colecao': typeof AuthenticatedColecaoRoute
   '/conta': typeof AuthenticatedContaRoute
   '/minha-loja': typeof AuthenticatedMinhaLojaRoute
+  '/acervo/$slug': typeof AcervoSlugRoute
   '/carta/$cardId': typeof CartaCardIdRoute
   '/colecoes/$setId': typeof ColecoesSetIdRoute
   '/loja/$slug': typeof LojaSlugRoute
@@ -236,6 +244,7 @@ export interface FileRoutesById {
   '/_authenticated/colecao': typeof AuthenticatedColecaoRoute
   '/_authenticated/conta': typeof AuthenticatedContaRoute
   '/_authenticated/minha-loja': typeof AuthenticatedMinhaLojaRoute
+  '/acervo/$slug': typeof AcervoSlugRoute
   '/carta/$cardId': typeof CartaCardIdRoute
   '/colecoes/$setId': typeof ColecoesSetIdRoute
   '/loja/$slug': typeof LojaSlugRoute
@@ -264,6 +273,7 @@ export interface FileRouteTypes {
     | '/colecao'
     | '/conta'
     | '/minha-loja'
+    | '/acervo/$slug'
     | '/carta/$cardId'
     | '/colecoes/$setId'
     | '/loja/$slug'
@@ -290,6 +300,7 @@ export interface FileRouteTypes {
     | '/colecao'
     | '/conta'
     | '/minha-loja'
+    | '/acervo/$slug'
     | '/carta/$cardId'
     | '/colecoes/$setId'
     | '/loja/$slug'
@@ -317,6 +328,7 @@ export interface FileRouteTypes {
     | '/_authenticated/colecao'
     | '/_authenticated/conta'
     | '/_authenticated/minha-loja'
+    | '/acervo/$slug'
     | '/carta/$cardId'
     | '/colecoes/$setId'
     | '/loja/$slug'
@@ -340,6 +352,7 @@ export interface RootRouteChildren {
   SegurancaRoute: typeof SegurancaRoute
   TermosRoute: typeof TermosRoute
   VenderRoute: typeof VenderRoute
+  AcervoSlugRoute: typeof AcervoSlugRoute
   CartaCardIdRoute: typeof CartaCardIdRoute
   ColecoesSetIdRoute: typeof ColecoesSetIdRoute
   LojaSlugRoute: typeof LojaSlugRoute
@@ -481,6 +494,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedMinhaLojaRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/acervo/$slug': {
+      id: '/acervo/$slug'
+      path: '/acervo/$slug'
+      fullPath: '/acervo/$slug'
+      preLoaderRoute: typeof AcervoSlugRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/carta/$cardId': {
       id: '/carta/$cardId'
       path: '/carta/$cardId'
@@ -564,6 +584,7 @@ const rootRouteChildren: RootRouteChildren = {
   SegurancaRoute: SegurancaRoute,
   TermosRoute: TermosRoute,
   VenderRoute: VenderRoute,
+  AcervoSlugRoute: AcervoSlugRoute,
   CartaCardIdRoute: CartaCardIdRoute,
   ColecoesSetIdRoute: ColecoesSetIdRoute,
   LojaSlugRoute: LojaSlugRoute,

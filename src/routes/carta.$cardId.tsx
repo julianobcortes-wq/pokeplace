@@ -22,6 +22,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useCart } from "@/lib/cart";
 import { useAuth } from "@/hooks/useAuth";
 import { BRAND, CONDITIONS, LANGUAGES, FINISHES, money } from "@/lib/format";
+import { CONDITION_PRICE_FACTORS } from "@/lib/marketplace/grading";
 
 export const Route = createFileRoute("/carta/$cardId")({
   loader: async ({ params }) => {
@@ -148,7 +149,16 @@ function CardPage() {
                   </span>
                 ))}
             </div>
-            <CollectionActions cardId={card.id} />
+            <CollectionActions
+              cardId={card.id}
+              referenceBrl={(() => {
+                const raw = quote?.available
+                  ? (quote.price ?? quote.tcgplayer?.market ?? quote.cardmarket?.trend ?? null)
+                  : null;
+                if (raw != null && raw > 0) return convertToBrl(raw, quote?.currency ?? "USD", fx);
+                return best ? Number(best.price) : null;
+              })()}
+            />
 
             <div className="mt-6 grid gap-3 md:grid-cols-2">
               <div className="flex flex-col justify-between rounded-2xl border border-ink-foreground/10 bg-ink-foreground/5 p-5">
@@ -604,6 +614,29 @@ function PriceHistory({ cardId, quote, fx }: { cardId: string; quote: CardQuote 
           </ResponsiveContainer>
         )}
       </div>
+
+      {!locked && last != null && last > 0 && (
+        <div className="mt-4 border-t border-border pt-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Referência estimada por condição ({currency})
+            </p>
+            <p className="text-[11px] text-muted-foreground">Baseado em Near Mint (NM) = 100%</p>
+          </div>
+          <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-6">
+            {(["M", "NM", "SP", "MP", "HP", "D"] as const).map((code) => {
+              const factor = CONDITION_PRICE_FACTORS[code] ?? 1;
+              return (
+                <div key={code} className="rounded-xl border border-border bg-muted/40 px-2.5 py-2 text-center">
+                  <p className="text-[11px] font-bold">{code}</p>
+                  <p className="num mt-0.5 text-xs font-semibold">{fmtMoney(last * factor)}</p>
+                  <p className="text-[10px] text-muted-foreground">{Math.round(factor * 100)}%</p>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {quote?.available && (tcg || cm) && (
         <div className="mt-4 grid gap-2.5 border-t border-border pt-4 text-xs sm:grid-cols-2">

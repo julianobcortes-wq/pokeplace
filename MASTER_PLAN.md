@@ -54,10 +54,10 @@ Plano mestre vivo para fechamento completo e comercial do marketplace **PokePlac
 - [x] Histórico de suporte vinculado diretamente ao pedido (`SupportInbox` + link clicável de rastreio + resumo de descontos em `pedidos.$orderId.tsx`)
 
 ### Fase 5 — Portfólio Estilo Collectr e Inteligência de Preços
-- [ ] Custo de aquisição, condição, valorização total, P&L (lucro/prejuízo R$ e %) e agrupamento por coleção/set
-- [ ] Histórico de preços multi-janela (7D / 30D / 90D / 365D) e comparativo estimado por condição na página da carta
-- [ ] Alertas de preço (acima/abaixo de valor BRL) com avaliação em lote e notificação in-app + e-mail
-- [ ] Exportação CSV da coleção e link público compartilhável opt-in (LGPD) em `/acervo/$slug`
+- [x] Custo de aquisição, condição, valorização ajustada por condição, P&L (lucro/prejuízo R$ e %), agrupamento por coleção e correspondências de lista de desejos (`0018`, `portfolio.ts`, `colecao.tsx`)
+- [x] Histórico de preços multi-janela (7D / 1M / 3M / 6M / 1A / Tudo) e comparativo estimado por condição (M/NM/SP/MP/HP/D) na página da carta (`carta.$cardId.tsx`)
+- [x] Alertas de preço (acima/abaixo de valor BRL) com criação rápida na carta, gestão em `/colecao` e avaliação em lote no cron (`price_alerts`, `evaluate_price_alerts`, `CollectionActions.tsx`, `orders-cron.ts`)
+- [x] Exportação CSV UTF-8 BOM da coleção e link público compartilhável opt-in (LGPD) em `/acervo/$slug` (`get_public_collection`, `acervo.$slug.tsx`)
 
 ### Fase 6 — Analytics e Ferramentas Comerciais dos Vendedores
 - [ ] Painel de analytics do vendedor: vendas por período (7d/30d/90d/tudo), receita bruta/líquida após comissão, ticket médio, cartas mais vendidas, giro/valor de estoque
@@ -82,4 +82,4 @@ Plano mestre vivo para fechamento completo e comercial do marketplace **PokePlac
 4. **Cron agendado na Cloudflare**: Configurar um Cron Trigger ou GitHub Actions agendado chamando `/api/cron/sync-prices` e `/api/cron/orders-maintenance` com header `x-cron-secret`.
 
 ## Próxima Tarefa Imediata
-Executar Fase 5 — Portfólio estilo Collectr (custo de aquisição, P&L R$/%, agrupamento por coleção, correspondências de wishlist, alertas de preço, exportação CSV e compartilhamento público opt-in `/acervo/$slug` + gráfico 7D/30D/90D/365D e comparativo por condição).
+Executar Fase 6 — Analytics do Vendedor (vendas por período 7d/30d/90d/tudo, receita bruta/comissão/líquida, ticket médio, top cartas, giro e valorização de estoque) + Preço Sugerido Inteligente no cadastro de anúncios.
