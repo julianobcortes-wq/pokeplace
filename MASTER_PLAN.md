@@ -60,9 +60,9 @@ Plano mestre vivo para fechamento completo e comercial do marketplace **PokePlac
 - [x] Exportação CSV UTF-8 BOM da coleção e link público compartilhável opt-in (LGPD) em `/acervo/$slug` (`get_public_collection`, `acervo.$slug.tsx`)
 
 ### Fase 6 — Analytics e Ferramentas Comerciais dos Vendedores
-- [ ] Painel de analytics do vendedor: vendas por período (7d/30d/90d/tudo), receita bruta/líquida após comissão, ticket médio, cartas mais vendidas, giro/valor de estoque
-- [ ] Preço sugerido inteligente baseado no histórico de mercado + concorrência na mesma condição
-- [ ] Promoções de volume por loja (ex.: leve 3+ cartas com X% de desconto) integradas ao carrinho e pedido
+- [x] Painel de analytics do vendedor (`analytics.ts`, `SellerAnalytics.tsx`, `minha-loja.tsx`): vendas por período (7d/30d/90d/tudo), receita bruta, comissões, receita líquida, ticket médio, giro (sell-through), valor de estoque ativo, gráfico diário e top cartas mais vendidas
+- [x] Preço sugerido inteligente (`suggestListingPrice` + `SmartPriceButton` em `NewListing`) combinando histórico BRL ajustado por condição e menor oferta concorrente ativa
+- [x] Promoções de volume por loja (`store_volume_discounts`, `SellerPromotions.tsx`) e cupons por loja integrados ao carrinho e `place_order_v2`
 
 ### Fase 7 — Testes, Segurança, Performance e Auditoria Final Independente
 - [ ] Cobertura completa de testes unitários e de integração (jornadas comprador/vendedor/admin, pagamentos, concorrência, integridade financeira, ofertas, cupons, frete UF, portfólio, analytics, segurança)
@@ -82,4 +82,4 @@ Plano mestre vivo para fechamento completo e comercial do marketplace **PokePlac
 4. **Cron agendado na Cloudflare**: Configurar um Cron Trigger ou GitHub Actions agendado chamando `/api/cron/sync-prices` e `/api/cron/orders-maintenance` com header `x-cron-secret`.
 
 ## Próxima Tarefa Imediata
-Executar Fase 6 — Analytics do Vendedor (vendas por período 7d/30d/90d/tudo, receita bruta/comissão/líquida, ticket médio, top cartas, giro e valorização de estoque) + Preço Sugerido Inteligente no cadastro de anúncios.
+Executar Fase 7 — Testes de segurança/integridade RLS/SQL, build de produção Cloudflare Workers, verificação HTTP de rotas reais no servidor local, auditoria independente completa (links, botões, TODOs, segredos, responsividade), correção de eventuais achados, push e abertura de PR.

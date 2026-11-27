@@ -14,11 +14,14 @@ import { BulkListingEditor } from "@/components/BulkListingEditor";
 import { ConditionGuide } from "@/components/ConditionGuide";
 import { OffersInbox } from "@/components/OffersInbox";
 import { SellerPromotions } from "@/components/SellerPromotions";
+import { SellerAnalytics } from "@/components/SellerAnalytics";
 import { supabase } from "@/integrations/supabase/client";
+import { dbRpc } from "@/lib/supabase-ext";
 import { searchCards } from "@/lib/catalog.functions";
 import type { Database } from "@/integrations/supabase/types";
 import { updateOwnListing } from "@/lib/guard.functions";
 import { BRAND, CONDITIONS, FINISHES, LANGUAGES, SELLER_STATUS, money } from "@/lib/format";
+import { suggestListingPrice, type PriceSuggestion } from "@/lib/marketplace/analytics";
 import { photoSlotLabel, validateGrading } from "@/lib/marketplace/grading";
 import { shippingSlaStatus } from "@/lib/marketplace/rules";
 import { getCarrierTrackingUrl, SHIPPING_CARRIERS } from "@/lib/marketplace/shipping";
@@ -134,6 +137,26 @@ function MyStore() {
         </div>
 
         <SellerTrustPanel sellerId={seller.id} approved={approved} canAppeal />
+        <SellerAnalytics
+          sales={liveSales.map((s) => ({
+            id: s.id,
+            order_id: s.order_id,
+            card_id: s.card_id,
+            card_name: s.cards?.name ?? null,
+            quantity: s.quantity,
+            unit_price: Number(s.unit_price),
+            commission: Number(s.commission_amount ?? 0),
+            status: s.status,
+            created_at: s.orders?.created_at ?? new Date().toISOString(),
+          }))}
+          inventory={listings.map((l) => ({
+            id: l.id,
+            card_id: l.card_id,
+            price: Number(l.price),
+            quantity: l.quantity,
+            status: l.status,
+          }))}
+        />
         <StoreProfileEditor seller={seller} onDone={refresh} />
         <StoreReviews sellerId={seller.id} />
         <SellerInbox sellerId={seller.id} />
@@ -508,7 +531,14 @@ function NewListing({ sellerId, onDone }: { sellerId: string; onDone: () => void
               </>
             )}
             <label className="text-sm">
-              Preço (R$)
+              <span className="flex items-center justify-between gap-2">
+                Preço (R$)
+                <SmartPriceButton
+                  cardId={card.id}
+                  condition={f.condition}
+                  onApply={(v) => setF({ ...f, price: v.toFixed(2) })}
+                />
+              </span>
               <input required inputMode="decimal" className={i} value={f.price} onChange={(e) => setF({ ...f, price: e.target.value })} />
             </label>
             <label className="text-sm">
@@ -554,6 +584,63 @@ function NewListing({ sellerId, onDone }: { sellerId: string; onDone: () => void
         </form>
       )}
     </section>
+  );
+}
+
+function SmartPriceButton({
+  cardId,
+  condition,
+  onApply,
+}: {
+  cardId: string;
+  condition: string;
+  onApply: (brl: number) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [lastSug, setLastSug] = useState<PriceSuggestion | null>(null);
+
+  const fetchSuggestion = async () => {
+    setBusy(true);
+    try {
+      const [refRes, compRes] = await Promise.all([
+        dbRpc<Array<{ card_id: string; price_brl: number }>>("get_card_reference_prices", { _card_ids: [cardId] }),
+        supabase
+          .from("listings")
+          .select("price")
+          .eq("card_id", cardId)
+          .eq("condition", condition)
+          .eq("status", "active")
+          .gt("quantity", 0),
+      ]);
+      const refRow = Array.isArray(refRes.data) ? refRes.data[0] : null;
+      const compPrices = (compRes.data ?? []).map((r) => Number(r.price)).filter((n) => n > 0);
+      const sug = suggestListingPrice({
+        referenceBrl: refRow?.price_brl ? Number(refRow.price_brl) : null,
+        competingPrices: compPrices,
+        condition,
+      });
+      if (!sug) {
+        toast.info("Sem histórico ou concorrência suficiente para sugerir preço nesta condição.");
+        return;
+      }
+      setLastSug(sug);
+      onApply(sug.suggestedBrl);
+      toast.success(`Preço sugerido: ${money(sug.suggestedBrl)} — ${sug.rationale}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={fetchSuggestion}
+      disabled={busy}
+      title={lastSug?.rationale ?? "Calcular preço sugerido baseado no histórico BRL e concorrência"}
+      className="text-[11px] font-semibold text-primary hover:underline disabled:opacity-50"
+    >
+      {busy ? "Calculando…" : "Sugerir preço"}
+    </button>
   );
 }
 
