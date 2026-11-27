@@ -10,6 +10,7 @@ import { PageShell } from "@/components/SiteHeader";
 import { SellerTrustPanel } from "@/components/market";
 import { BuyerReviewForm, StoreProfileEditor, StoreReviews } from "@/components/seller-tools";
 import { BulkListingUpload } from "@/components/BulkListingUpload";
+import { BulkListingEditor } from "@/components/BulkListingEditor";
 import { supabase } from "@/integrations/supabase/client";
 import { searchCards } from "@/lib/catalog.functions";
 import type { Database } from "@/integrations/supabase/types";
@@ -33,6 +34,7 @@ export const Route = createFileRoute("/_authenticated/minha-loja")({
 
 function MyStore() {
   const qc = useQueryClient();
+  const [selected, setSelected] = useState<string[]>([]);
   const { data, isLoading } = useQuery({
     queryKey: ["store"],
     queryFn: async () => {
@@ -148,11 +150,40 @@ function MyStore() {
           {listings.length === 0 ? (
             <p className="mt-2 text-sm text-muted-foreground">Nenhum anúncio ainda.</p>
           ) : (
-            <div className="mt-3 divide-y divide-border">
-              {listings.map((l) => (
-                <ListingRow key={l.id} l={l} canActivate={approved} onSave={updateListing} />
-              ))}
-            </div>
+            <>
+              <div className="mt-3 flex items-center gap-3 text-xs">
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    aria-label="Selecionar todos os anúncios"
+                    checked={selected.length === listings.length}
+                    onChange={(e) => setSelected(e.target.checked ? listings.map((l) => l.id) : [])}
+                  />
+                  Selecionar todos
+                </label>
+              </div>
+              {selected.length > 0 && (
+                <BulkListingEditor
+                  sellerId={seller.id}
+                  selectedIds={selected}
+                  approved={approved}
+                  onClear={() => setSelected([])}
+                  onDone={refresh}
+                />
+              )}
+              <div className="mt-3 divide-y divide-border">
+                {listings.map((l) => (
+                  <ListingRow
+                    key={l.id}
+                    l={l}
+                    canActivate={approved}
+                    onSave={updateListing}
+                    selected={selected.includes(l.id)}
+                    onToggle={() => setSelected((cur) => (cur.includes(l.id) ? cur.filter((x) => x !== l.id) : [...cur, l.id]))}
+                  />
+                ))}
+              </div>
+            </>
           )}
         </section>
 
@@ -239,11 +270,24 @@ type L = {
   cards: { name: string; number: string; image_small: string | null; card_sets: { name: string } | null } | null;
 };
 
-function ListingRow({ l, canActivate, onSave }: { l: L; canActivate: boolean; onSave: (id: string, p: ListingPatch) => void }) {
+function ListingRow({
+  l,
+  canActivate,
+  onSave,
+  selected,
+  onToggle,
+}: {
+  l: L;
+  canActivate: boolean;
+  onSave: (id: string, p: ListingPatch) => void;
+  selected: boolean;
+  onToggle: () => void;
+}) {
   const [price, setPrice] = useState(String(l.price));
   const [qty, setQty] = useState(String(l.quantity));
   return (
     <div className="flex flex-wrap items-center gap-3 py-3">
+      <input type="checkbox" aria-label={`Selecionar ${l.cards?.name ?? "anúncio"}`} checked={selected} onChange={onToggle} />
       {l.cards?.image_small && <img src={l.cards.image_small} alt="" className="h-14 w-auto rounded-md shadow-slab" />}
       <div className="min-w-48 flex-1">
         <p className="font-semibold">

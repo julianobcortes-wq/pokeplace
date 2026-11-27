@@ -1,6 +1,12 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import {
+  BULK_EDIT_MAX_LISTINGS,
+  planBulkEdit,
+  validatePriceRule,
+  type BulkEditListing,
+} from "@/lib/marketplace/bulk-edit";
 
 type Authed = {
   supabase: {
@@ -152,4 +158,75 @@ export const updateOwnListing = createServerFn({ method: "POST" })
       ...(data.patch.status !== undefined ? { status: data.patch.status } : {}),
     }).eq("id", data.listingId).eq("seller_id", seller.id);
     if (error) throw new Error(error.message);
+  });
+
+const bulkEditAction = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("price"),
+    rule: z.discriminatedUnion("mode", [
+      z.object({ mode: z.literal("set"), price: z.number().finite() }),
+      z.object({ mode: z.literal("percent"), percent: z.number().finite() }),
+    ]),
+  }),
+  z.object({ kind: z.literal("quantity"), quantity: z.number().int().min(0).max(9999) }),
+  z.object({ kind: z.literal("status"), status: z.enum(["active", "paused", "removed"]) }),
+]);
+
+export const bulkUpdateOwnListings = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d: { sellerId: string; listingIds: string[]; action: unknown }) =>
+    z
+      .object({
+        sellerId: z.string().uuid(),
+        listingIds: z.array(z.string().uuid()).min(1).max(BULK_EDIT_MAX_LISTINGS),
+        action: bulkEditAction,
+      })
+      .parse(d),
+  )
+  .handler(async ({ data, context }) => {
+    const ctx = auth(context);
+    if (data.action.kind === "price") {
+      const ruleError = validatePriceRule(data.action.rule);
+      if (ruleError) throw new Error(ruleError);
+    }
+    const { data: seller, error: sellerError } = await ctx.supabase
+      .from("sellers")
+      .select("id,status")
+      .eq("id", data.sellerId)
+      .eq("user_id", ctx.userId)
+      .maybeSingle();
+    if (sellerError || !seller) throw new Error("Acesso negado");
+    const { data: rows, error: readError } = await ctx.supabase
+      .from("listings")
+      .select("id,price,quantity,status")
+      .eq("seller_id", seller.id)
+      .in("id", data.listingIds);
+    if (readError) throw new Error("Não foi possível ler os anúncios");
+    const plan = planBulkEdit(
+      (rows ?? []) as BulkEditListing[],
+      data.action,
+      seller.status === "approved",
+    );
+    const failed: { id: string; reason: string }[] = [];
+    let updated = 0;
+    for (const u of plan.updates) {
+      const { error } = await ctx.supabase
+        .from("listings")
+        .update(u.patch)
+        .eq("id", u.id)
+        .eq("seller_id", seller.id);
+      if (error) failed.push({ id: u.id, reason: error.message });
+      else updated++;
+    }
+    const missing = data.listingIds.filter(
+      (id) => !(rows ?? []).some((r: { id: string }) => r.id === id),
+    );
+    return {
+      updated,
+      skipped: [
+        ...plan.skipped,
+        ...failed,
+        ...missing.map((id) => ({ id, reason: "Anúncio não encontrado." })),
+      ],
+    };
   });
