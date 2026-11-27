@@ -2,9 +2,13 @@ import { MarketplaceImage } from "./MarketplaceImage";
 import { Link } from "@tanstack/react-router";
 import { AlertTriangle, Award, BadgeCheck, Clock, ShieldCheck, Sparkles, Star } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import { dbRpc, dbTable } from "@/lib/supabase-ext";
 import { isSupabaseConfigured } from "@/lib/runtime-config";
+import { validateStrikeAppealReason } from "@/lib/marketplace/disputes";
+import { Button } from "@/components/ui/button";
 import {
   BUYER_TIER_META,
   formatResponseTime,
@@ -292,9 +296,61 @@ export function useSellerThermometer(id?: string) {
   });
 }
 
-export function SellerTrustPanel({ sellerId, approved = false }: { sellerId: string; approved?: boolean }) {
+export function SellerTrustPanel({
+  sellerId,
+  approved = false,
+  canAppeal = false,
+}: {
+  sellerId: string;
+  approved?: boolean;
+  canAppeal?: boolean;
+}) {
+  const qc = useQueryClient();
   const { data, isPending, isError } = useSellerTrust(sellerId);
   const { data: thermo } = useSellerThermometer(sellerId);
+  const [appealOpen, setAppealOpen] = useState(false);
+  const [appealReason, setAppealReason] = useState("");
+  const [submittingAppeal, setSubmittingAppeal] = useState(false);
+
+  const { data: appeals = [] } = useQuery({
+    queryKey: ["seller-strike-appeals", sellerId],
+    enabled: canAppeal && isSupabaseConfigured(),
+    queryFn: async () => {
+      const { data: rows } = await dbTable("seller_strike_appeals")
+        .select("id,reason,status,admin_note,created_at")
+        .eq("seller_id", sellerId)
+        .order("created_at", { ascending: false })
+        .limit(3);
+      return (rows ?? []) as Array<{
+        id: string;
+        reason: string;
+        status: string;
+        admin_note: string | null;
+        created_at: string;
+      }>;
+    },
+  });
+
+  const submitAppeal = async () => {
+    const check = validateStrikeAppealReason(appealReason);
+    if (check) {
+      toast.error(check);
+      return;
+    }
+    setSubmittingAppeal(true);
+    const { error } = await dbRpc("submit_strike_appeal", { _reason: appealReason.trim() });
+    setSubmittingAppeal(false);
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
+    toast.success("Recurso enviado para a equipe PokePlace");
+    setAppealReason("");
+    setAppealOpen(false);
+    qc.invalidateQueries({ queryKey: ["seller-strike-appeals", sellerId] });
+  };
+
+  const hasOpenAppeal = appeals.some((a) => a.status === "open");
   const activeThermometer = thermo?.thermometer ?? legacyLevelToThermometer(data?.level);
   return <section className="border-y border-border py-6">
     <div className="flex flex-wrap items-center justify-between gap-3">
@@ -308,15 +364,62 @@ export function SellerTrustPanel({ sellerId, approved = false }: { sellerId: str
       </div>
     </div>
     {thermo?.strike_status === "restricted" && (
-      <div className="mt-3 flex items-start gap-2 rounded-xl border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive">
-        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-        <p><b>Restrição automática ativa:</b> taxa de reclamações ou cancelamentos acima do limite da plataforma. Novos anúncios ficam pausados até revisão do suporte.</p>
+      <div className="mt-3 space-y-2 rounded-xl border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive">
+        <div className="flex items-start gap-2">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <p className="flex-1"><b>Restrição automática ativa:</b> taxa de reclamações ou cancelamentos acima do limite da plataforma. Novos anúncios ficam pausados até revisão do suporte.</p>
+        </div>
+        {canAppeal && !hasOpenAppeal && !appealOpen && (
+          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setAppealOpen(true)}>
+            Solicitar revisão de restrição
+          </Button>
+        )}
+        {canAppeal && hasOpenAppeal && (
+          <p className="font-semibold text-foreground">Recurso em análise pela equipe PokePlace.</p>
+        )}
       </div>
     )}
     {thermo?.strike_status === "warning" && (
-      <div className="mt-3 flex items-start gap-2 rounded-xl border border-chart-4/40 bg-chart-4/10 p-3 text-xs text-foreground">
-        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-chart-4" />
-        <p><b>Alerta de desempenho:</b> mantenha reclamações e cancelamentos abaixo de 5% e postagens no prazo acima de 90% para evitar restrições.</p>
+      <div className="mt-3 flex flex-wrap items-start justify-between gap-2 rounded-xl border border-chart-4/40 bg-chart-4/10 p-3 text-xs text-foreground">
+        <div className="flex items-start gap-2">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-chart-4" />
+          <p><b>Alerta de desempenho:</b> mantenha reclamações e cancelamentos abaixo de 5% e postagens no prazo acima de 90% para evitar restrições.</p>
+        </div>
+        {canAppeal && !hasOpenAppeal && !appealOpen && (
+          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setAppealOpen(true)}>
+            Contestar indicador
+          </Button>
+        )}
+      </div>
+    )}
+    {canAppeal && appealOpen && (
+      <div className="mt-3 space-y-2 rounded-xl border border-border bg-card p-3 text-xs">
+        <p className="font-semibold">Explique os motivos e as ações corretivas (mín. 20 caracteres):</p>
+        <textarea
+          value={appealReason}
+          onChange={(e) => setAppealReason(e.target.value)}
+          rows={3}
+          maxLength={2000}
+          placeholder="Ex.: tivemos atraso pontual nos Correios no pedido #..., já enviamos reposição e ajustamos o prazo de postagem."
+          className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs"
+        />
+        <div className="flex gap-2">
+          <Button size="sm" onClick={submitAppeal} disabled={submittingAppeal || appealReason.trim().length < 20}>
+            {submittingAppeal ? "Enviando…" : "Enviar recurso"}
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setAppealOpen(false)}>Cancelar</Button>
+        </div>
+      </div>
+    )}
+    {canAppeal && appeals.length > 0 && (
+      <div className="mt-3 space-y-1 text-xs text-muted-foreground">
+        {appeals.slice(0, 2).map((a) => (
+          <p key={a.id}>
+            Recurso ({new Date(a.created_at).toLocaleDateString("pt-BR")}):{" "}
+            <b>{a.status === "open" ? "Em análise" : a.status === "approved" ? "Aprovado" : "Indeferido"}</b>
+            {a.admin_note ? ` · ${a.admin_note}` : ""}
+          </p>
+        ))}
       </div>
     )}
     {isError ? <p className="mt-3 text-sm text-muted-foreground">Não foi possível consultar a reputação agora.</p> : isPending ? <p className="mt-3 text-sm text-muted-foreground">Consultando reputação…</p> : data ? <>

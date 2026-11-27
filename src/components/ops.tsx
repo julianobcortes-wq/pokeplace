@@ -1,15 +1,22 @@
 import { useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bell, Flag } from "lucide-react";
+import { Bell, Flag, Paperclip } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import { dbRpc, dbTable } from "@/lib/supabase-ext";
+import { MarketplaceImage } from "@/components/MarketplaceImage";
 import { Button } from "@/components/ui/button";
 import { money } from "@/lib/format";
 import { safeNotificationHref } from "@/lib/safe-url";
 import { isSupabaseConfigured } from "@/lib/runtime-config";
 import { getPaymentOptions } from "@/lib/payments/functions";
 import { processPayout, requestSellerPayout, resolveDispute, reviewReport, setPlatformSetting } from "@/lib/guard.functions";
+import {
+  DISPUTE_MAX_ATTACHMENTS,
+  disputeDeadlineStatus,
+  validateEvidenceFile,
+} from "@/lib/marketplace/disputes";
 import {
   BRAZIL_REGIONS,
   BRAZILIAN_UFS,
@@ -187,12 +194,55 @@ export function DisputeThread({
 }) {
   const qc = useQueryClient();
   const [body, setBody] = useState("");
+  const [attachments, setAttachments] = useState<string[]>([]);
+  const [uploading, setUploading] = useState(false);
   const [amount, setAmount] = useState("");
   const [retCarrier, setRetCarrier] = useState("");
   const [retTrack, setRetTrack] = useState("");
   const { data = [] } = useQuery({ queryKey: ["dispute-msgs", dispute.id], queryFn: async () => (await supabase.from("dispute_messages").select("*").eq("dispute_id", dispute.id).order("created_at")).data ?? [] });
   const refresh = () => qc.invalidateQueries();
-  const reply = async (escalate = false) => { if (err((await supabase.rpc("reply_dispute", { _dispute_id: dispute.id, _body: body || "Solicito mediação da PokePlace.", _escalate: escalate })).error, "Enviado")) { setBody(""); refresh(); } };
+  const uploadEvidence = async (file: File | null) => {
+    if (!file) return;
+    if (attachments.length >= DISPUTE_MAX_ATTACHMENTS) {
+      toast.error(`Máximo de ${DISPUTE_MAX_ATTACHMENTS} fotos por mensagem.`);
+      return;
+    }
+    const check = validateEvidenceFile(file);
+    if (check) {
+      toast.error(check);
+      return;
+    }
+    setUploading(true);
+    const ext = file.name.split(".").pop()?.toLowerCase() || "jpg";
+    const path = `disputes/${dispute.id}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+    const { error } = await supabase.storage.from("marketplace-media").upload(path, file, { upsert: false, contentType: file.type });
+    setUploading(false);
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
+    setAttachments((cur) => [...cur, path]);
+    toast.success("Evidência anexada");
+  };
+  const reply = async (escalate = false) => {
+    const msg = body || "Solicito mediação da PokePlace.";
+    let res = attachments.length > 0
+      ? await dbRpc("reply_dispute_with_attachments", {
+          _dispute_id: dispute.id,
+          _body: msg,
+          _escalate: escalate,
+          _attachments: attachments,
+        })
+      : await supabase.rpc("reply_dispute", { _dispute_id: dispute.id, _body: msg, _escalate: escalate });
+    if (res.error && /reply_dispute_with_attachments/i.test(res.error.message)) {
+      res = await supabase.rpc("reply_dispute", { _dispute_id: dispute.id, _body: msg, _escalate: escalate });
+    }
+    if (err(res.error, "Enviado")) {
+      setBody("");
+      setAttachments([]);
+      refresh();
+    }
+  };
   const submitReturn = async () => {
     const res = await (supabase as unknown as {
       rpc: (fn: string, args: Record<string, unknown>) => Promise<{ error: { message: string } | null }>;
@@ -211,17 +261,46 @@ export function DisputeThread({
     } catch (e) { toast.error(e instanceof Error ? e.message : "Acesso negado"); }
   };
   const done = dispute.status.startsWith("resolved");
+  const deadline = disputeDeadlineStatus(dispute.seller_deadline, dispute.status);
   return (
     <div className="space-y-2 rounded border border-destructive/30 p-3 text-sm">
-      <p><b>Problema:</b> {DISPUTE_REASON[dispute.reason] ?? dispute.reason} · <b>{DISPUTE_STATUS[dispute.status]}</b></p>
-      {dispute.status === "open" && <p className="text-xs text-muted-foreground">A loja tem até {new Date(dispute.seller_deadline).toLocaleString("pt-BR")} para responder.</p>}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p><b>Problema:</b> {DISPUTE_REASON[dispute.reason] ?? dispute.reason} · <b>{DISPUTE_STATUS[dispute.status]}</b></p>
+        {deadline && (
+          <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${deadline.overdue ? "bg-destructive/15 text-destructive" : deadline.urgent ? "bg-chart-4/20 text-chart-4" : "bg-muted text-muted-foreground"}`}>
+            {deadline.label}
+          </span>
+        )}
+      </div>
       {dispute.return_tracking_code && (
         <p className="rounded bg-muted px-2.5 py-1.5 text-xs">
           <b>Devolução postada:</b> {dispute.return_carrier} · <span className="num font-semibold">{dispute.return_tracking_code}</span>
         </p>
       )}
-      {done && <p className="text-xs">Decisão: {dispute.resolution_note} {Number(dispute.resolution_amount) > 0 && `· ${money(Number(dispute.resolution_amount))}`}</p>}
-      <div className="max-h-56 space-y-1 overflow-auto">{data.map((m) => <p key={m.id} className="rounded bg-muted p-2"><span className="text-[11px] text-muted-foreground">{new Date(m.created_at).toLocaleString("pt-BR")}</span><br />{m.body}</p>)}</div>
+      {done && (
+        <div className="rounded-lg border border-success/30 bg-success/10 p-2.5 text-xs">
+          <p className="font-semibold">Decisão da mediação PokePlace</p>
+          <p className="mt-0.5">{dispute.resolution_note} {Number(dispute.resolution_amount) > 0 && `· Valor: ${money(Number(dispute.resolution_amount))}`}</p>
+        </div>
+      )}
+      <div className="max-h-64 space-y-1.5 overflow-auto">
+        {data.map((m) => {
+          const msgAtt = ((m as unknown as { attachment_paths?: string[] | null }).attachment_paths ?? []);
+          return (
+            <div key={m.id} className="rounded bg-muted p-2">
+              <span className="text-[11px] text-muted-foreground">{new Date(m.created_at).toLocaleString("pt-BR")}</span>
+              <p className="whitespace-pre-wrap">{m.body}</p>
+              {msgAtt.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {msgAtt.map((p, i) => (
+                    <MarketplaceImage key={`${p}-${i}`} src={p} alt={`Evidência ${i + 1}`} className="h-20 w-20 rounded object-cover" />
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
       {!done && role === "buyer" && !dispute.return_tracking_code && (
         <div className="rounded border border-border bg-muted/40 p-2.5">
           <p className="text-xs font-medium">Devolvendo a carta? Informe o código de rastreio da postagem:</p>
@@ -234,6 +313,27 @@ export function DisputeThread({
       )}
       {!done && <>
         <textarea value={body} onChange={(e) => setBody(e.target.value)} maxLength={4000} className={f} placeholder={role === "admin" ? "Justificativa da decisão" : "Sua mensagem"} />
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-input bg-background px-2.5 py-1 text-xs font-medium hover:bg-muted">
+            <Paperclip className="h-3.5 w-3.5" />
+            {uploading ? "Enviando foto…" : `Anexar evidência (${attachments.length}/${DISPUTE_MAX_ATTACHMENTS})`}
+            <input
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              className="hidden"
+              disabled={uploading || attachments.length >= DISPUTE_MAX_ATTACHMENTS}
+              onChange={(e) => {
+                void uploadEvidence(e.target.files?.[0] ?? null);
+                e.target.value = "";
+              }}
+            />
+          </label>
+          {attachments.length > 0 && (
+            <span className="text-xs text-muted-foreground">
+              {attachments.length} foto{attachments.length === 1 ? "" : "s"} pronta{attachments.length === 1 ? "" : "s"} para enviar
+            </span>
+          )}
+        </div>
         <div className="flex flex-wrap gap-2">
           {role !== "admin" && <Button size="sm" onClick={() => reply()} disabled={!body.trim()}>Responder</Button>}
           {role !== "admin" && dispute.status !== "escalated" && <Button size="sm" variant="outline" onClick={() => reply(true)}>Pedir mediação PokePlace</Button>}
@@ -489,15 +589,39 @@ export function AdminOps() {
   const qc = useQueryClient();
   const [notes, setNotes] = useState<Record<string, string>>({});
   const { data } = useQuery({ queryKey: ["admin-ops"], queryFn: async () => {
-    const [d, p, r, s] = await Promise.all([
+    const [d, p, r, s, appealsRes] = await Promise.all([
       supabase.from("disputes").select("*").not("status", "like", "resolved%").order("created_at"),
       supabase.from("payout_requests").select("*, sellers(store_name)").eq("status", "requested").order("created_at"),
       supabase.from("reports").select("*").eq("status", "open").order("created_at"),
       supabase.from("platform_settings").select("key,value"),
+      dbTable("seller_strike_appeals").select("id,seller_id,reason,status,created_at").eq("status", "open").order("created_at"),
     ]);
-    return { disputes: d.data ?? [], payouts: p.data ?? [], reports: r.data ?? [], settings: Object.fromEntries((s.data ?? []).map((x) => [x.key, x.value])) as Record<string, unknown> };
+    const appeals = ((appealsRes.data ?? []) as Array<{
+      id: string;
+      seller_id: string;
+      reason: string;
+      status: string;
+      created_at: string;
+    }>);
+    return {
+      disputes: d.data ?? [],
+      payouts: p.data ?? [],
+      reports: r.data ?? [],
+      appeals,
+      settings: Object.fromEntries((s.data ?? []).map((x) => [x.key, x.value])) as Record<string, unknown>,
+    };
   } });
   const refresh = () => qc.invalidateQueries({ queryKey: ["admin-ops"] });
+  const reviewAppeal = async (appealId: string, decision: "approved" | "rejected") => {
+    const res = await dbRpc("admin_review_strike_appeal", {
+      _appeal_id: appealId,
+      _decision: decision,
+      _note: notes[appealId] ?? "",
+    });
+    if (err(res.error, decision === "approved" ? "Recurso aprovado e restrição removida" : "Recurso indeferido")) {
+      refresh();
+    }
+  };
   const payout = async (id: string, status: string) => {
     try { await processPayout({ data: { payoutId: id, status: status === "rejected" ? "rejected" : "paid", note: notes[id] ?? "" } }); toast.success("Saque atualizado"); refresh(); }
     catch (e) { toast.error(e instanceof Error ? e.message : "Acesso negado"); }
@@ -542,6 +666,24 @@ export function AdminOps() {
             <span className="flex-1">{r.target_type} {r.target_id.slice(0, 8)} · {r.reason}{r.details ? ` · ${r.details}` : ""}</span>
             <input placeholder="Observação" className="rounded border border-input px-2 py-1" value={notes[r.id] ?? ""} onChange={(e) => setNotes({ ...notes, [r.id]: e.target.value })} />
             <Button size="sm" onClick={() => report(r.id, "actioned")}>{r.target_type === "listing" ? "Remover anúncio" : "Procedente"}</Button><Button size="sm" variant="outline" onClick={() => report(r.id, "dismissed")}>Arquivar</Button>
+          </div>
+        ))}
+      </section>
+      <section className={box}>
+        <h2 className="text-lg font-semibold">Recursos de restrição de vendedores ({data?.appeals.length ?? 0})</h2>
+        {(data?.appeals.length ?? 0) === 0 && <p className="mt-2 text-sm text-muted-foreground">Nenhum recurso pendente.</p>}
+        {data?.appeals.map((a) => (
+          <div key={a.id} className="mt-3 space-y-2 border-t border-border pt-3 text-sm">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="font-medium">Loja #{a.seller_id.slice(0, 8)}</span>
+              <span className="text-xs text-muted-foreground">{new Date(a.created_at).toLocaleString("pt-BR")}</span>
+            </div>
+            <p className="rounded bg-muted/60 p-2 text-xs">{a.reason}</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <input placeholder="Observação da decisão" className="flex-1 rounded border border-input px-2 py-1 text-xs" value={notes[a.id] ?? ""} onChange={(e) => setNotes({ ...notes, [a.id]: e.target.value })} />
+              <Button size="sm" onClick={() => reviewAppeal(a.id, "approved")}>Aprovar e desbloquear</Button>
+              <Button size="sm" variant="outline" onClick={() => reviewAppeal(a.id, "rejected")}>Indeferir</Button>
+            </div>
           </div>
         ))}
       </section>

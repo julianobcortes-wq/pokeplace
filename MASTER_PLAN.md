@@ -48,10 +48,10 @@ Plano mestre vivo para fechamento completo e comercial do marketplace **PokePlac
 
 ### Fase 4 — Reputação, Confiança, Disputas e Mediação
 - [x] Termômetro 5 níveis, medalhas PokeLíder, strikes, CDC art. 49 (7 dias), SLA de envio, ranking opt-in `/ranking`
-- [ ] Anexos de evidência (fotos) em mensagens de disputa (`dispute_messages.attachment_paths`)
-- [ ] Exibição clara de prazo de resposta do vendedor e painel de decisão de mediação administrativa
-- [ ] Fluxo de revisão/recurso de strikes pelo vendedor (`seller_strike_appeals`) com fila de análise no admin
-- [ ] Histórico de suporte vinculado diretamente ao pedido (`pedidos.$orderId.tsx`)
+- [x] Anexos de evidência (fotos até 5 MB, máx. 4 por mensagem) em disputas (`0017`, `dispute_messages.attachment_paths`, `reply_dispute_with_attachments`, `DisputeThread`)
+- [x] Contagem regressiva de prazo de resposta do vendedor (`disputeDeadlineStatus`) e painel claro de decisão de mediação administrativa
+- [x] Fluxo de revisão/recurso de strikes pelo vendedor (`seller_strike_appeals`, `submit_strike_appeal`, `admin_review_strike_appeal`, `SellerTrustPanel` + fila em `AdminOps`)
+- [x] Histórico de suporte vinculado diretamente ao pedido (`SupportInbox` + link clicável de rastreio + resumo de descontos em `pedidos.$orderId.tsx`)
 
 ### Fase 5 — Portfólio Estilo Collectr e Inteligência de Preços
 - [ ] Custo de aquisição, condição, valorização total, P&L (lucro/prejuízo R$ e %) e agrupamento por coleção/set
@@ -82,4 +82,4 @@ Plano mestre vivo para fechamento completo e comercial do marketplace **PokePlac
 4. **Cron agendado na Cloudflare**: Configurar um Cron Trigger ou GitHub Actions agendado chamando `/api/cron/sync-prices` e `/api/cron/orders-maintenance` com header `x-cron-secret`.
 
 ## Próxima Tarefa Imediata
-Concluir Fase 0 (rate limiting público, correção do bug `limit: 30 -> 10` no admin, compatibilidade `env` Cloudflare no `src/server.ts`, testes de Phase 0) e seguir imediatamente para a Fase 1.
+Executar Fase 5 — Portfólio estilo Collectr (custo de aquisição, P&L R$/%, agrupamento por coleção, correspondências de wishlist, alertas de preço, exportação CSV e compartilhamento público opt-in `/acervo/$slug` + gráfico 7D/30D/90D/365D e comparativo por condição).

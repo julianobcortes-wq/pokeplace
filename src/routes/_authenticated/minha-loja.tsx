@@ -133,7 +133,7 @@ function MyStore() {
           </div>
         </div>
 
-        <SellerTrustPanel sellerId={seller.id} approved={approved} />
+        <SellerTrustPanel sellerId={seller.id} approved={approved} canAppeal />
         <StoreProfileEditor seller={seller} onDone={refresh} />
         <StoreReviews sellerId={seller.id} />
         <SellerInbox sellerId={seller.id} />

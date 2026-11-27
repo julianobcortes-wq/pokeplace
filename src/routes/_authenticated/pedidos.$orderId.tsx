@@ -11,6 +11,7 @@ import { ReviewForm } from "@/components/seller-tools";
 import { SellerLine } from "@/components/market";
 import { supabase } from "@/integrations/supabase/client";
 import { BRAND, ORDER_STATUS, money } from "@/lib/format";
+import { getCarrierTrackingUrl } from "@/lib/marketplace/shipping";
 
 type OrderSearch = { status?: string | undefined; collection_status?: string | undefined };
 
@@ -173,11 +174,21 @@ function OrderPage() {
                   <p className="text-xs text-muted-foreground">
                     {i.quantity} × {money(Number(i.unit_price))} · {ITEM_STATUS[i.status] ?? i.status}
                   </p>
-                  {i.tracking_code && (
-                    <p className="mt-1 break-words text-xs">
-                      {i.shipping_carrier} · Rastreio: <b className="num">{i.tracking_code}</b>
-                    </p>
-                  )}
+                  {i.tracking_code && (() => {
+                    const trackUrl = getCarrierTrackingUrl(i.shipping_carrier, i.tracking_code);
+                    return (
+                      <p className="mt-1 break-words text-xs">
+                        {i.shipping_carrier} · Rastreio:{" "}
+                        {trackUrl ? (
+                          <a href={trackUrl} target="_blank" rel="noopener noreferrer" className="num font-semibold text-primary hover:underline">
+                            {i.tracking_code} ↗
+                          </a>
+                        ) : (
+                          <b className="num">{i.tracking_code}</b>
+                        )}
+                      </p>
+                    );
+                  })()}
                 </div>
                 <p className="num font-semibold">{money(Number(i.unit_price) * i.quantity)}</p>
               </div>
@@ -186,8 +197,15 @@ function OrderPage() {
 
           <div className="mt-3 flex justify-between border-t border-border pt-3 text-lg">
             <span>Total</span>
-            <span className="num font-bold">{money(Number(o.subtotal) + Number(o.shipping_total ?? 0))}</span>
+            <span className="num font-bold">
+              {money(Math.max(0, Number(o.subtotal) + Number(o.shipping_total ?? 0) - Number((o as unknown as { discount_total?: number }).discount_total ?? 0)))}
+            </span>
           </div>
+          {Number((o as unknown as { discount_total?: number }).discount_total ?? 0) > 0 && (
+            <p className="text-right text-xs text-success">
+              Desconto aplicado: −{money(Number((o as unknown as { discount_total?: number }).discount_total ?? 0))}
+            </p>
+          )}
           {Number(o.shipping_total) > 0 && (
             <p className="text-right text-xs text-muted-foreground">inclui frete de {money(Number(o.shipping_total))}</p>
           )}

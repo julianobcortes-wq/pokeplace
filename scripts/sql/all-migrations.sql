@@ -2472,6 +2472,122 @@ $$;
 REVOKE ALL ON FUNCTION public.list_orders_needing_delivery_warning() FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.list_orders_needing_delivery_warning() TO service_role;
 
+-- =====================================================================
+-- 0017_disputes_attachments_strike_appeals.sql
+-- Phase 4: Dispute evidence attachments & Seller strike appeal review flow
+-- =====================================================================
+
+ALTER TABLE public.dispute_messages
+  ADD COLUMN IF NOT EXISTS attachment_paths text[] NOT NULL DEFAULT '{}'::text[];
+
+CREATE OR REPLACE FUNCTION public.reply_dispute_with_attachments(
+  _dispute_id uuid,
+  _body text,
+  _escalate boolean DEFAULT false,
+  _attachments text[] DEFAULT '{}'::text[]
+) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  d record;
+  v_is_seller boolean;
+  v_is_admin boolean;
+  v_att text[];
+BEGIN
+  SELECT * INTO d FROM public.disputes WHERE id = _dispute_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Problema não encontrado'; END IF;
+  v_is_seller := public.owns_seller(d.seller_id);
+  v_is_admin := public.has_role(auth.uid(), 'admin');
+  IF NOT (d.buyer_id = auth.uid() OR v_is_seller OR v_is_admin) THEN RAISE EXCEPTION 'Acesso negado'; END IF;
+  IF d.status LIKE 'resolved%' THEN RAISE EXCEPTION 'Problema já resolvido'; END IF;
+  IF length(trim(coalesce(_body, ''))) NOT BETWEEN 1 AND 4000 THEN
+    RAISE EXCEPTION 'Mensagem deve ter de 1 a 4000 caracteres';
+  END IF;
+  v_att := coalesce(_attachments, '{}'::text[]);
+  IF coalesce(array_length(v_att, 1), 0) > 4 THEN
+    RAISE EXCEPTION 'Máximo de 4 anexos por mensagem';
+  END IF;
+
+  INSERT INTO public.dispute_messages (dispute_id, sender_id, body, attachment_paths)
+  VALUES (_dispute_id, auth.uid(), trim(_body), v_att);
+
+  IF _escalate AND (d.buyer_id = auth.uid() OR v_is_seller) THEN
+    UPDATE public.disputes SET status = 'escalated' WHERE id = _dispute_id;
+  ELSIF v_is_seller AND d.status = 'open' THEN
+    UPDATE public.disputes SET status = 'seller_responded' WHERE id = _dispute_id;
+  END IF;
+END $$;
+GRANT EXECUTE ON FUNCTION public.reply_dispute_with_attachments(uuid, text, boolean, text[]) TO authenticated;
+
+CREATE TABLE IF NOT EXISTS public.seller_strike_appeals (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  seller_id uuid NOT NULL REFERENCES public.sellers(id) ON DELETE CASCADE,
+  user_id uuid NOT NULL,
+  reason text NOT NULL CHECK (length(trim(reason)) BETWEEN 20 AND 2000),
+  status text NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'approved', 'rejected')),
+  admin_note text,
+  resolved_by uuid,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  resolved_at timestamptz
+);
+CREATE INDEX IF NOT EXISTS idx_strike_appeals_seller ON public.seller_strike_appeals(seller_id, created_at DESC);
+GRANT SELECT ON public.seller_strike_appeals TO authenticated;
+GRANT ALL ON public.seller_strike_appeals TO service_role;
+ALTER TABLE public.seller_strike_appeals ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS strike_appeals_read ON public.seller_strike_appeals;
+CREATE POLICY strike_appeals_read ON public.seller_strike_appeals
+  FOR SELECT TO authenticated
+  USING (public.owns_seller(seller_id) OR public.has_role(auth.uid(), 'admin'));
+
+CREATE OR REPLACE FUNCTION public.submit_strike_appeal(_seller_id uuid, _reason text)
+RETURNS uuid
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_id uuid;
+BEGIN
+  IF auth.uid() IS NULL OR NOT public.owns_seller(_seller_id) THEN
+    RAISE EXCEPTION 'Somente o proprietário da loja pode solicitar revisão';
+  END IF;
+  IF length(trim(coalesce(_reason, ''))) NOT BETWEEN 20 AND 2000 THEN
+    RAISE EXCEPTION 'Explique sua justificativa com pelo menos 20 caracteres';
+  END IF;
+  IF EXISTS (SELECT 1 FROM public.seller_strike_appeals WHERE seller_id = _seller_id AND status = 'open') THEN
+    RAISE EXCEPTION 'Já existe um pedido de revisão em aberto para esta loja';
+  END IF;
+  INSERT INTO public.seller_strike_appeals (seller_id, user_id, reason)
+  VALUES (_seller_id, auth.uid(), trim(_reason))
+  RETURNING id INTO v_id;
+  RETURN v_id;
+END $$;
+GRANT EXECUTE ON FUNCTION public.submit_strike_appeal(uuid, text) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.admin_review_strike_appeal(_appeal_id uuid, _decision text, _note text DEFAULT NULL)
+RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE a record; v_seller_user uuid;
+BEGIN
+  IF NOT public.has_role(auth.uid(), 'admin') THEN RAISE EXCEPTION 'Acesso restrito a administradores'; END IF;
+  IF _decision NOT IN ('approved', 'rejected') THEN RAISE EXCEPTION 'Decisão inválida'; END IF;
+  SELECT * INTO a FROM public.seller_strike_appeals WHERE id = _appeal_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Pedido de revisão não encontrado'; END IF;
+  IF a.status <> 'open' THEN RAISE EXCEPTION 'Este pedido de revisão já foi encerrado'; END IF;
+
+  UPDATE public.seller_strike_appeals
+     SET status = _decision,
+         admin_note = nullif(trim(coalesce(_note, '')), ''),
+         resolved_by = auth.uid(),
+         resolved_at = now()
+   WHERE id = _appeal_id;
+
+  SELECT user_id INTO v_seller_user FROM public.sellers WHERE id = a.seller_id;
+  IF _decision = 'approved' THEN
+    UPDATE public.sellers SET strike_cleared_at = now() WHERE id = a.seller_id;
+    PERFORM public.notify(v_seller_user, 'Revisão de restrição aprovada', 'Sua loja teve a restrição removida pela equipe PokePlace.', '/minha-loja');
+  ELSE
+    PERFORM public.notify(v_seller_user, 'Revisão de restrição recusada', coalesce(nullif(trim(_note), ''), 'A restrição permanece ativa após análise.'), '/minha-loja');
+  END IF;
+END $$;
+GRANT EXECUTE ON FUNCTION public.admin_review_strike_appeal(uuid, text, text) TO authenticated;
+
+
 
 
 
