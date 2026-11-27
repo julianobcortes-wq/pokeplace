@@ -5,6 +5,7 @@ import {
   parseBulkListingCsv,
   parsePrice,
   splitCsvLine,
+  toListingInserts,
 } from "@/lib/marketplace/bulk-listing";
 
 const HEADER = "card_id,condition,language,finish,price,quantity,graded,grade_company,grade,notes";
@@ -117,5 +118,29 @@ describe("parseBulkListingCsv", () => {
     const result = parseBulkListingCsv(bulkListingTemplate());
     expect(result.issues).toEqual([]);
     expect(result.rows).toHaveLength(1);
+  });
+});
+
+describe("toListingInserts", () => {
+  it("maps parsed rows to listing insert payloads for a seller", () => {
+    const { rows } = parseBulkListingCsv(
+      `${HEADER}\nsv3pt5-199,nm,en,normal,"1.234,50",2,sim,PSA,10,canto\n`,
+    );
+    expect(toListingInserts(rows, "seller-1")).toEqual([
+      {
+        seller_id: "seller-1",
+        card_id: "sv3pt5-199",
+        condition: "NM",
+        language: "en",
+        finish: "normal",
+        price: 1234.5,
+        quantity: 2,
+        graded: true,
+        grade_company: "PSA",
+        grade: "10",
+        notes: "canto",
+        photo_paths: [],
+      },
+    ]);
   });
 });

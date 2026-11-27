@@ -9,6 +9,7 @@ import { SupportInbox } from "@/components/SupportInbox";
 import { PageShell } from "@/components/SiteHeader";
 import { SellerTrustPanel } from "@/components/market";
 import { BuyerReviewForm, StoreProfileEditor, StoreReviews } from "@/components/seller-tools";
+import { BulkListingUpload } from "@/components/BulkListingUpload";
 import { supabase } from "@/integrations/supabase/client";
 import { searchCards } from "@/lib/catalog.functions";
 import type { Database } from "@/integrations/supabase/types";
@@ -132,7 +133,10 @@ function MyStore() {
         <SellerFinance sellerId={seller.id} />
 
         {approved ? (
-          <NewListing sellerId={seller.id} onDone={refresh} />
+          <>
+            <NewListing sellerId={seller.id} onDone={refresh} />
+            <BulkListingUpload sellerId={seller.id} onDone={refresh} />
+          </>
         ) : (
           <p className="rounded-2xl border border-border bg-card p-5 text-sm shadow-slab">
             Sua loja está com situação “{SELLER_STATUS[seller.status]}”. Novos anúncios só podem ser publicados por lojas aprovadas.

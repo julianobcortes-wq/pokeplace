@@ -206,6 +206,23 @@ export function parseBulkListingCsv(text: string): BulkListingParseResult {
   return { rows, issues, totalLines: dataLines.length };
 }
 
+export function toListingInserts(rows: BulkListingRow[], sellerId: string) {
+  return rows.map((r) => ({
+    seller_id: sellerId,
+    card_id: r.cardId,
+    condition: r.condition,
+    language: r.language,
+    finish: r.finish,
+    price: r.price,
+    quantity: r.quantity,
+    graded: r.graded,
+    grade_company: r.gradeCompany,
+    grade: r.grade,
+    notes: r.notes,
+    photo_paths: [] as string[],
+  }));
+}
+
 export function bulkListingTemplate(): string {
   return `${BULK_HEADERS.join(",")}\nsv3pt5-199,NM,en,normal,12.50,1,nao,,,\n`;
 }
