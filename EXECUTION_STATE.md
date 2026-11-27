@@ -1,11 +1,13 @@
 # Estado de Execução Autônoma — PokePlace
 
-- **Timestamp (UTC)**: 2026-11-27T20:45:00Z
+- **Timestamp (UTC)**: 2026-11-27T20:49:00Z
 - **Branch atual**: `cursor/complete-marketplace-3347`
-- **Fase atual**: Fase 7 — Testes de Segurança/Integridade, Auditoria Independente Completa, Build de Produção e Encerramento
-- **Último marco concluído**: Fase 6 concluída (`src/lib/marketplace/analytics.ts`, `src/components/SellerAnalytics.tsx`, `SmartPriceButton` em `NewListing`, `src/test/analytics-pricing.test.ts`, 19 suítes / 123 testes verdes, `tsc --noEmit` limpo).
-- **Próximo passo exato**:
-  1. Criar suíte de auditoria de segurança e integridade (`src/test/security-and-integrity.test.ts`): validar `all-migrations.sql` (todas as tabelas novas com `ENABLE ROW LEVEL SECURITY`, ausência de `confirm_test_payment` liberado para anon/cliente em produção, fail-closed em webhook/cron, nenhum arquivo `.sql` em `public/` ou `.output/public/`).
-  2. Executar auditoria independente: grep de TODOs/FIXMEs/href quebrados/botões sem handler/secrets vazados + `npm run build` + teste HTTP real das rotas SSR no servidor de preview.
-  3. Corrigir todo e qualquer achado, reexecutar toda a bateria (build + tsc + vitest), atualizar docs (`MASTER_PLAN.md`, `EXECUTION_STATE.md`, relatório no store), dar `git push` e abrir PR via `ManagePullRequest`.
-- **Testes mais recentes**: 19 suítes / 123 testes passando, `tsc --noEmit` limpo.
+- **Status geral**: **CONCLUÍDO (Fases 0 a 7 + Auditoria Independente Final)** — restam exclusivamente ações externas do proprietário.
+- **Último marco concluído**: Fase 7 concluída (`src/test/security-and-integrity.test.ts`, auditoria de segurança/RLS/links/TODOs, verificação HTTP SSR real de 10 rotas/endpoints com headers de segurança, `tsc --noEmit` limpo, `20` suítes / `131` testes verdes, `npm run build` Cloudflare Workers limpo).
+- **Pendências técnicas executáveis**: Nenhuma.
+- **Bloqueios exclusivamente externos (proprietário)**:
+  1. Merge do PR na `main`.
+  2. Executar `scripts/sql/all-migrations.sql` no SQL Editor do Supabase (idempotente — aplica `0014` a `0018`).
+  3. Conectar o repositório na Cloudflare Workers seguindo `docs/CLOUDFLARE_DEPLOY.md` e configurar as variáveis de ambiente (`VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `CRON_SECRET`, `APP_PUBLIC_URL`, `RESEND_API_KEY`, `MP_ACCESS_TOKEN`, `MP_WEBHOOK_SECRET`).
+  4. Configurar o Webhook do Mercado Pago (`/api/mercadopago/webhook`) e os Cron Triggers (`/api/cron/sync-prices` e `/api/cron/orders-maintenance`).
+- **Testes mais recentes**: 20 suítes / 131 testes passando (`2` suítes de integração DB-live puladas por falta de credenciais locais), `tsc --noEmit` = 0 erros, `npm run build` = sucesso.

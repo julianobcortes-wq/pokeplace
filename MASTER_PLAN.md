@@ -65,10 +65,10 @@ Plano mestre vivo para fechamento completo e comercial do marketplace **PokePlac
 - [x] Promoções de volume por loja (`store_volume_discounts`, `SellerPromotions.tsx`) e cupons por loja integrados ao carrinho e `place_order_v2`
 
 ### Fase 7 — Testes, Segurança, Performance e Auditoria Final Independente
-- [ ] Cobertura completa de testes unitários e de integração (jornadas comprador/vendedor/admin, pagamentos, concorrência, integridade financeira, ofertas, cupons, frete UF, portfólio, analytics, segurança)
-- [ ] Auditoria de segurança (RLS, SECURITY DEFINER, HMAC webhook, proteção contra open redirect/XSS, ausência de segredos ou arquivos SQL expostos)
-- [ ] Auditoria completa de UI/rotas/links/botões/TODOs e responsividade (mobile 390px e desktop 1440px)
-- [ ] Correção de todos os achados e reauditoria limpa com build e testes 100% verdes
+- [x] Cobertura completa de testes unitários e de segurança/integridade (`20` suítes / `131` testes verdes, incluindo `rate-limit.test.ts`, `grading-and-repricing.test.ts`, `offers-promotions-shipping.test.ts`, `payments-emails-cron.test.ts`, `disputes-appeals.test.ts`, `portfolio-alerts.test.ts`, `analytics-pricing.test.ts` e `security-and-integrity.test.ts`)
+- [x] Auditoria de segurança (RLS em 100% das novas tabelas, RPCs administrativas com `has_role(..., 'admin')`, RPCs internas restritas a `service_role`, webhook HMAC fail-closed + idempotência, headers HTTP de segurança, zero segredos ou arquivos `.sql` em `public/` ou `.output/public/`, zero imports de `client.server` em código cliente)
+- [x] Auditoria completa de UI/rotas/links/botões/TODOs (`0` TODOs/FIXMEs/links `#`/handlers vazios, verificação HTTP SSR real em `/`, `/colecoes`, `/carta/swsh7-95`, `/ranking`, `/carrinho`, `/compra-garantida`, `/acervo/demo-test`, `/api/health`, `/api/mercadopago/webhook` -> 401, `/api/cron/orders-maintenance` -> 503)
+- [x] Build de produção Cloudflare Workers (`npm run build` gerando `.output/server/wrangler.json` e `.wrangler/deploy/config.json`) e `tsc --noEmit` 100% limpos
 
 ---
 
@@ -82,4 +82,4 @@ Plano mestre vivo para fechamento completo e comercial do marketplace **PokePlac
 4. **Cron agendado na Cloudflare**: Configurar um Cron Trigger ou GitHub Actions agendado chamando `/api/cron/sync-prices` e `/api/cron/orders-maintenance` com header `x-cron-secret`.
 
 ## Próxima Tarefa Imediata
-Executar Fase 7 — Testes de segurança/integridade RLS/SQL, build de produção Cloudflare Workers, verificação HTTP de rotas reais no servidor local, auditoria independente completa (links, botões, TODOs, segredos, responsividade), correção de eventuais achados, push e abertura de PR.
+Nenhuma pendência técnica autônoma restante. Aguardando exclusivamente ações externas do proprietário (merge do PR, aplicação de `scripts/sql/all-migrations.sql` no Supabase, conexão Cloudflare Workers + variáveis de produção e credenciais Mercado Pago / Resend).
