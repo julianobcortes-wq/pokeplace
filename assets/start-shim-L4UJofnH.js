@@ -1,0 +1,1 @@
+function e(e){let t=null,n={middleware(){return n},inputValidator(e){return t=e,n},handler(e){return async n=>{let r=n&&`data`in n?n.data:void 0;return await e({data:t?t(r):r,context:{}})}}};return n}function t(e){return{server:e=>({}),client:e=>({})}}export{e as n,t};

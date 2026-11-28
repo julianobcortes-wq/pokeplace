@@ -1,0 +1,1 @@
+function e(){throw Error(`Admin database client is unavailable in static demo mode.`)}export{e as supabaseAdmin};
