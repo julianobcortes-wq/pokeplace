@@ -14,6 +14,14 @@ import {
 } from "./catalog/local";
 import type { TrendSummary } from "./pricing/series";
 import { tcgdexOutboundBudget } from "./rolling-budget";
+import { isDemoMode } from "./demo-mode";
+import {
+  DEMO_STORES,
+  getDemoLatestListings,
+  getDemoPublicStores,
+  getDemoStoreBySlug,
+  getDemoTrend,
+} from "./demo-data";
 
 function dbConfigured() {
   return Boolean(process.env["SUPABASE_URL"] && process.env["SUPABASE_PUBLISHABLE_KEY"]);
@@ -163,7 +171,7 @@ export const searchCards = createServerFn({ method: "GET" })
   });
 
 export const latestListings = createServerFn({ method: "GET" }).handler(async () => {
-  if (!dbConfigured()) return [];
+  if (!dbConfigured()) return isDemoMode() ? getDemoLatestListings() : [];
   try {
     const { data, error } = await publicDb()
       .from("listings")
@@ -180,7 +188,15 @@ export const latestListings = createServerFn({ method: "GET" }).handler(async ()
 });
 
 export const marketStats = createServerFn({ method: "GET" }).handler(async () => {
-  if (!dbConfigured()) return localStats();
+  if (!dbConfigured()) {
+    const base = localStats();
+    if (!isDemoMode()) return base;
+    return {
+      ...base,
+      offers: DEMO_STORES.reduce((acc, s) => acc + s.active_listings, 0),
+      stores: DEMO_STORES.length,
+    };
+  }
   try {
     const db = publicDb();
     const [cards, sets, listings] = await Promise.all([
@@ -294,11 +310,18 @@ export const getTrends = createServerFn({ method: "GET" })
       });
       await Promise.all(workers);
     }
+    if (isDemoMode()) {
+      for (const id of data.ids) {
+        if (!out[id]?.points?.length) {
+          out[id] = getDemoTrend(id);
+        }
+      }
+    }
     return out;
   });
 
 export const listStores = createServerFn({ method: "GET" }).handler(async () => {
-  if (!dbConfigured()) return [];
+  if (!dbConfigured()) return isDemoMode() ? getDemoPublicStores() : [];
   try {
     const { data, error } = await publicDb().rpc("list_public_sellers", { _limit: 8 });
     if (error) return [];
@@ -311,7 +334,7 @@ export const listStores = createServerFn({ method: "GET" }).handler(async () => 
 export const getStore = createServerFn({ method: "GET" })
   .inputValidator((d: { slug: string }) => d)
   .handler(async ({ data }) => {
-    if (!dbConfigured()) return null;
+    if (!dbConfigured()) return isDemoMode() ? getDemoStoreBySlug(data.slug) : null;
     try {
       const db = publicDb();
       const { data: rows, error } = await db.rpc("get_public_seller", { _slug: data.slug });

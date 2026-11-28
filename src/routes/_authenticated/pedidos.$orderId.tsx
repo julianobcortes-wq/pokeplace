@@ -10,6 +10,9 @@ import { SupportInbox } from "@/components/SupportInbox";
 import { ReviewForm } from "@/components/seller-tools";
 import { SellerLine } from "@/components/market";
 import { supabase } from "@/integrations/supabase/client";
+import { isSupabaseConfigured } from "@/lib/runtime-config";
+import { DEMO_USER, isDemoMode } from "@/lib/demo-mode";
+import { DEMO_STORES, loadDemoOrders } from "@/lib/demo-data";
 import { BRAND, ORDER_STATUS, money } from "@/lib/format";
 import { getCarrierTrackingUrl } from "@/lib/marketplace/shipping";
 
@@ -48,8 +51,13 @@ function OrderPage() {
   const { orderId } = Route.useParams();
   const search = Route.useSearch();
   const returnStatus = search.collection_status ?? search.status;
+  const demo = isDemoMode() && !isSupabaseConfigured();
 
   const confirm = async (id: string) => {
+    if (demo) {
+      toast.success("Recebimento confirmado (modo demonstração)");
+      return;
+    }
     const { error } = await supabase.rpc("confirm_item_received", { _item_id: id });
     if (error) toast.error(error.message);
     else {
@@ -59,8 +67,60 @@ function OrderPage() {
   };
 
   const { data } = useQuery({
-    queryKey: ["order", orderId],
+    queryKey: ["order", orderId, demo],
     queryFn: async () => {
+      if (demo) {
+        const found = loadDemoOrders().find((o) => o.id === orderId) ?? null;
+        if (!found) {
+          return {
+            me: DEMO_USER.id,
+            disputes: [],
+            ships: [],
+            order: null,
+            items: [],
+            pay: [],
+            stores: [],
+          };
+        }
+        const items = found.items.map((it, idx) => ({
+          id: `${found.id}-item-${idx}`,
+          order_id: found.id,
+          seller_id: DEMO_STORES.find((s) => s.store_name === it.storeName)?.id ?? DEMO_STORES[0]!.id,
+          quantity: it.qty,
+          unit_price: it.price,
+          status: "pending",
+          delivered_at: null,
+          tracking_code: null,
+          shipping_carrier: null,
+          cards: { name: it.cardName, number: "", image_small: it.image },
+        }));
+        const sellerIds = [...new Set(items.map((i) => i.seller_id))];
+        return {
+          me: DEMO_USER.id,
+          disputes: [],
+          ships: [],
+          order: {
+            id: found.id,
+            buyer_id: DEMO_USER.id,
+            status: found.status,
+            subtotal: found.subtotal,
+            shipping_total: found.shipping_total,
+            discount_total: found.discount_total,
+            created_at: found.created_at,
+            expires_at: null,
+          },
+          items,
+          pay: [
+            {
+              id: `${found.id}-pay`,
+              environment: "sandbox",
+              provider: "demo",
+              status: "simulated",
+            },
+          ],
+          stores: DEMO_STORES.filter((s) => sellerIds.includes(s.id)),
+        };
+      }
       const [{ data: order }, { data: items }, { data: pay }] = await Promise.all([
         supabase.from("orders").select("*").eq("id", orderId).maybeSingle(),
         supabase.from("order_items").select("*, cards(name, number, image_small)").eq("order_id", orderId),
@@ -210,8 +270,13 @@ function OrderPage() {
             <p className="text-right text-xs text-muted-foreground">inclui frete de {money(Number(o.shipping_total))}</p>
           )}
 
-          {o.buyer_id === data.me && (
+          {o.buyer_id === data.me && !demo && (
             <OrderBuyerActions order={o} items={data.items} sandbox={data.pay.some((p) => p.environment === "sandbox")} />
+          )}
+          {demo && (
+            <div className="mt-4 rounded-xl border border-primary/25 bg-primary/5 p-3 text-xs text-foreground">
+              <b>Pedido simulado (modo demonstração).</b> Salvo apenas no seu navegador para você testar o fluxo completo de compra. Nenhuma cobrança foi realizada.
+            </div>
           )}
 
           {[...new Set(data.items.map((i) => i.seller_id))].map((sid) => {
@@ -235,7 +300,7 @@ function OrderPage() {
                     i.status !== "cancelled" && <OpenDispute key={i.id} itemId={i.id} name={i.cards?.name ?? "o item"} />
                   );
                 })}
-                {o.status !== "cancelled" && <OrderChat orderId={o.id} sellerId={sid} mine={o.buyer_id === data.me ? "buyer" : "seller"} />}
+                {o.status !== "cancelled" && !demo && <OrderChat orderId={o.id} sellerId={sid} mine={o.buyer_id === data.me ? "buyer" : "seller"} />}
                 {its
                   .filter((i) => i.status === "shipped")
                   .map((i) => (

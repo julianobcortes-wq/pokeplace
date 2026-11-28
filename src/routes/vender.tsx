@@ -6,6 +6,7 @@ import { CheckCircle2, ClipboardCheck, ShieldCheck, Store } from "lucide-react";
 import { PageShell } from "@/components/SiteHeader";
 import { useAuth } from "@/hooks/useAuth";
 import { isSupabaseConfigured } from "@/lib/runtime-config";
+import { isDemoMode } from "@/lib/demo-mode";
 import { supabase } from "@/integrations/supabase/client";
 import { BRAND, SELLER_STATUS } from "@/lib/format";
 
@@ -125,6 +126,10 @@ function ApplyForm({ userId, email, onDone }: { userId: string; email: string; o
     e.preventDefault();
     if (!f.terms) {
       toast.error("Aceite os termos para continuar.");
+      return;
+    }
+    if (isDemoMode() && !isSupabaseConfigured()) {
+      toast.success("Inscrição simulada recebida (modo demonstração)!");
       return;
     }
     setBusy(true);

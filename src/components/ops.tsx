@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { money } from "@/lib/format";
 import { safeNotificationHref } from "@/lib/safe-url";
 import { isSupabaseConfigured } from "@/lib/runtime-config";
+import { isDemoMode } from "@/lib/demo-mode";
 import { getPaymentOptions } from "@/lib/payments/functions";
 import { processPayout, requestSellerPayout, resolveDispute, reviewReport, setPlatformSetting } from "@/lib/guard.functions";
 import {
@@ -67,6 +68,12 @@ export function ReportButton({ type, id }: { type: "listing" | "seller" | "quest
   const [reason, setReason] = useState("misleading");
   const [details, setDetails] = useState("");
   const send = async () => {
+    if (isDemoMode() && !isSupabaseConfigured()) {
+      toast.success("Denúncia registrada (modo demonstração)");
+      setDetails("");
+      setOpen(false);
+      return;
+    }
     const { data: u } = await supabase.auth.getUser();
     if (!u.user) { toast.error("Entre na sua conta para denunciar"); return; }
     const { error } = await supabase.from("reports").insert({ reporter_id: u.user.id, target_type: type, target_id: id, reason, details: details || null });
@@ -87,10 +94,40 @@ export function ReportButton({ type, id }: { type: "listing" | "seller" | "quest
 /* ---------- Perguntas públicas ---------- */
 export function ListingQuestions({ cardId, listings }: { cardId: string; listings: { listing_id: string; store_name: string }[] }) {
   const qc = useQueryClient();
+  const demo = isDemoMode() && !isSupabaseConfigured();
   const [listing, setListing] = useState("");
   const [q, setQ] = useState("");
-  const { data = [] } = useQuery({ queryKey: ["questions", cardId], enabled: isSupabaseConfigured(), queryFn: async () => (await supabase.from("listing_questions").select("id,listing_id,question,answer,answered_at,created_at").eq("card_id", cardId).order("created_at", { ascending: false }).limit(50)).data ?? [] });
-  const ask = async () => { const { error } = await supabase.rpc("ask_question", { _listing_id: listing || listings[0]!.listing_id, _question: q }); if (err(error, "Pergunta enviada à loja")) { setQ(""); qc.invalidateQueries({ queryKey: ["questions", cardId] }); } };
+  const [demoQuestions, setDemoQuestions] = useState<Array<{ id: string; listing_id: string; question: string; answer: string | null; answered_at: string | null; created_at: string }>>(() =>
+    demo && listings[0]
+      ? [{
+          id: `demo-q-${cardId}`,
+          listing_id: listings[0].listing_id,
+          question: "A carta vai enviada em sleeve + toploader com proteção contra dobra?",
+          answer: "Sim! Todas as cartas são enviadas em double sleeve, toploader rígido e embalagem acolchoada.",
+          answered_at: new Date().toISOString(),
+          created_at: new Date(Date.now() - 86_400_000 * 2).toISOString(),
+        }]
+      : [],
+  );
+  const { data: remoteData = [] } = useQuery({ queryKey: ["questions", cardId], enabled: isSupabaseConfigured(), queryFn: async () => (await supabase.from("listing_questions").select("id,listing_id,question,answer,answered_at,created_at").eq("card_id", cardId).order("created_at", { ascending: false }).limit(50)).data ?? [] });
+  const data = demo ? demoQuestions : remoteData;
+  const ask = async () => {
+    if (demo) {
+      setDemoQuestions((prev) => [{
+        id: `demo-q-${Date.now()}`,
+        listing_id: listing || listings[0]!.listing_id,
+        question: q.trim(),
+        answer: null,
+        answered_at: null,
+        created_at: new Date().toISOString(),
+      }, ...prev]);
+      toast.success("Pergunta enviada (modo demonstração)");
+      setQ("");
+      return;
+    }
+    const { error } = await supabase.rpc("ask_question", { _listing_id: listing || listings[0]!.listing_id, _question: q });
+    if (err(error, "Pergunta enviada à loja")) { setQ(""); qc.invalidateQueries({ queryKey: ["questions", cardId] }); }
+  };
   return (
     <section className="mt-10">
       <h2 className="text-2xl font-extrabold">Perguntas às lojas</h2>

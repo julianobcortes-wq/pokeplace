@@ -1,6 +1,8 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { isDemoMode } from "@/lib/demo-mode";
+import { getDemoQuote } from "@/lib/demo-data";
 
 export type PriceWindow = { label: string; days: number; price: number; currency: string };
 
@@ -263,7 +265,9 @@ export async function quoteCard(cardId: string): Promise<CardQuote> {
         cache.set(cardId, { at: Date.now(), quote });
         return quote;
       }
-      const empty = unavailable(cardId, "A TCGdex não publicou market price para esta carta.");
+      const empty = isDemoMode()
+        ? getDemoQuote(cardId)
+        : unavailable(cardId, "A TCGdex não publicou market price para esta carta.");
       cache.set(cardId, { at: Date.now(), quote: empty });
       return empty;
     } catch {
@@ -271,6 +275,12 @@ export async function quoteCard(cardId: string): Promise<CardQuote> {
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  if (isDemoMode()) {
+    const fallback = getDemoQuote(cardId);
+    cache.set(cardId, { at: Date.now(), quote: fallback });
+    return fallback;
   }
 
   return unavailable(cardId, "Não foi possível consultar a TCGdex agora. Nenhum preço foi estimado no lugar.");

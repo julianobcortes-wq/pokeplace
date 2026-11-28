@@ -12,6 +12,8 @@ import {
   validateOfferSubmission,
 } from "@/lib/marketplace/offers";
 import { dbRpc } from "@/lib/supabase-ext";
+import { isSupabaseConfigured } from "@/lib/runtime-config";
+import { isDemoMode } from "@/lib/demo-mode";
 
 type Props = {
   listingId: string;
@@ -72,6 +74,14 @@ export function OfferModal({
     });
     if (err) {
       toast.error(err);
+      return;
+    }
+    if (isDemoMode() && !isSupabaseConfigured()) {
+      toast.success("Proposta enviada (modo demonstração)!", {
+        description: `Oferta de ${money(offeredPrice, currency)} enviada para ${storeName}.`,
+      });
+      setOpen(false);
+      setMessage("");
       return;
     }
     setBusy(true);

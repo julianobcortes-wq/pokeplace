@@ -8,6 +8,12 @@ import { PageShell } from "@/components/SiteHeader";
 import { useCart } from "@/lib/cart";
 import { useAuth } from "@/hooks/useAuth";
 import { isSupabaseConfigured } from "@/lib/runtime-config";
+import { DEMO_COUPON_CODE, isDemoMode } from "@/lib/demo-mode";
+import {
+  createDemoOrder,
+  getDemoCartMetadata,
+  validateDemoCoupon,
+} from "@/lib/demo-data";
 import { supabase } from "@/integrations/supabase/client";
 import { dbRpc, dbTable } from "@/lib/supabase-ext";
 import { getPaymentOptions } from "@/lib/payments/functions";
@@ -47,6 +53,7 @@ type AppliedCoupon = { code: string; discount: number };
 function CartPage() {
   const { items, setQty, remove, clear } = useCart();
   const { user } = useAuth();
+  const demo = isDemoMode() && !isSupabaseConfigured();
   const nav = useNavigate();
   const [ship, setShip] = useState({ name: "", address: "", city: "", state: "", zip: "" });
   const [busy, setBusy] = useState(false);
@@ -54,14 +61,16 @@ function CartPage() {
   const [couponInput, setCouponInput] = useState<Record<string, string>>({});
   const [appliedCoupons, setAppliedCoupons] = useState<Record<string, AppliedCoupon>>({});
 
+  const demoMeta = demo ? getDemoCartMetadata(items.map((i) => i.listingId)) : null;
+
   const { data: payOpts } = useQuery({
     queryKey: ["payment-options"],
     queryFn: () => getPaymentOptions(),
     staleTime: 60_000,
-    enabled: !!user,
+    enabled: !!user && !demo,
   });
 
-  const { data: sellers = [] } = useQuery({
+  const { data: remoteSellers = [] } = useQuery({
     queryKey: ["cart-sellers", items.map((i) => i.listingId)],
     enabled: items.length > 0 && isSupabaseConfigured(),
     queryFn: async () => {
@@ -72,6 +81,7 @@ function CartPage() {
       return data ?? [];
     },
   });
+  const sellers = demo ? (demoMeta?.sellers ?? []) : remoteSellers;
 
   const bySeller = items.reduce<Record<string, typeof items>>((a, i) => {
     const key = sellers.find((s) => s.listing_id === i.listingId)?.seller_id ?? i.storeName;
@@ -81,14 +91,15 @@ function CartPage() {
 
   const sellerIds = [...new Set(sellers.map((s) => s.seller_id).filter(Boolean))] as string[];
 
-  const { data: profiles = [] } = useQuery({
+  const { data: remoteProfiles = [] } = useQuery({
     queryKey: ["ship-profiles", sellerIds],
     enabled: sellerIds.length > 0 && isSupabaseConfigured(),
     queryFn: async () =>
       (await supabase.from("shipping_profiles").select("*").in("seller_id", sellerIds)).data ?? [],
   });
+  const profiles = demo ? (demoMeta?.profiles ?? []) : remoteProfiles;
 
-  const { data: volumeTiers = [] } = useQuery({
+  const { data: remoteVolumeTiers = [] } = useQuery({
     queryKey: ["cart-volume-tiers", sellerIds],
     enabled: sellerIds.length > 0 && isSupabaseConfigured(),
     queryFn: async () => {
@@ -100,6 +111,7 @@ function CartPage() {
       return (data ?? []) as (VolumeDiscountTier & { seller_id: string })[];
     },
   });
+  const volumeTiers = demo ? (demoMeta?.volumeTiers ?? []) : remoteVolumeTiers;
 
   const storeSummaries = Object.entries(bySeller).map(([sellerKey, list]) => {
     const sub = list.reduce((a, i) => a + i.price * i.qty, 0);
@@ -141,6 +153,19 @@ function CartPage() {
     }
     if (!user) {
       toast.error("Entre na sua conta para aplicar cupons");
+      return;
+    }
+    if (demo) {
+      const row = validateDemoCoupon(code, netBeforeCoupon);
+      if (!row.valid) {
+        toast.error(row.reason ?? "Cupom inválido");
+        return;
+      }
+      setAppliedCoupons((cur) => ({
+        ...cur,
+        [sellerKey]: { code: row.code, discount: row.discount },
+      }));
+      toast.success(`Cupom ${row.code} aplicado (-${money(row.discount)})`);
       return;
     }
     const { data, error } = await dbRpc<
@@ -196,6 +221,21 @@ function CartPage() {
 
   const checkout = async () => {
     if (!user) return nav({ to: "/auth", search: { next: "/carrinho" } });
+    if (demo) {
+      const demoOrder = createDemoOrder({
+        items,
+        ship,
+        subtotal: totalGross,
+        discount_total: totalDiscount,
+        shipping_total: shipping,
+      });
+      clear();
+      toast.success("Pedido simulado criado!", {
+        description: "Modo demonstração — nenhuma cobrança real foi efetuada.",
+      });
+      nav({ to: "/pedidos/$orderId", params: { orderId: demoOrder.id } });
+      return;
+    }
     setBusy(true);
     const couponMap = Object.fromEntries(
       Object.entries(appliedCoupons).map(([sid, c]) => [sid, c.code]),
@@ -362,7 +402,7 @@ function CartPage() {
                         <Tag className="h-3.5 w-3.5 text-muted-foreground" />
                         <input
                           aria-label="Cupom da loja"
-                          placeholder="Cupom da loja"
+                          placeholder={demo ? `Cupom (ex: ${DEMO_COUPON_CODE})` : "Cupom da loja"}
                           value={couponInput[sellerKey] ?? ""}
                           onChange={(e) =>
                             setCouponInput((cur) => ({
@@ -462,9 +502,11 @@ function CartPage() {
           >
             {busy
               ? "Reservando cartas…"
-              : user
-                ? "Reservar e ir para pagamento"
-                : "Entrar para finalizar"}
+              : demo
+                ? "Simular pedido (modo demo)"
+                : user
+                  ? "Reservar e ir para pagamento"
+                  : "Entrar para finalizar"}
           </Button>
 
           <div className="rounded-2xl bg-muted p-3 text-xs text-muted-foreground">

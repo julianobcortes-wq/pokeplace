@@ -12,6 +12,7 @@ import {
   type OfferStatus,
 } from "@/lib/marketplace/offers";
 import { dbRpc, dbTable } from "@/lib/supabase-ext";
+import { isSupabaseConfigured } from "@/lib/runtime-config";
 
 type OfferRow = {
   id: string;
@@ -49,7 +50,7 @@ export function OffersInbox({
   const key = mode === "seller" ? ["seller-offers", sellerId] : ["buyer-offers", userId];
   const { data: offers = [] } = useQuery({
     queryKey: key,
-    enabled: mode === "seller" ? !!sellerId : !!userId,
+    enabled: isSupabaseConfigured() && (mode === "seller" ? !!sellerId : !!userId),
     queryFn: async () => {
       const base = dbTable("listing_offers").select(
         "*, cards(name,number,image_small), sellers(store_name,slug)",

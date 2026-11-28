@@ -18,6 +18,8 @@ import { getCardQuote, type CardQuote } from "@/lib/pricing/quote";
 import { convertToBrl, fxRateToBrl, getFxRatesFn, type FxRates } from "@/lib/pricing/fx";
 import { buildReferenceSeries } from "@/lib/pricing/series";
 import { isSupabaseConfigured } from "@/lib/runtime-config";
+import { isDemoMode } from "@/lib/demo-mode";
+import { getDemoCardOffers } from "@/lib/demo-data";
 import { supabase } from "@/integrations/supabase/client";
 import { useCart } from "@/lib/cart";
 import { useAuth } from "@/hooks/useAuth";
@@ -59,11 +61,15 @@ function CardPage() {
   const [cond, setCond] = useState("");
   const [lang, setLang] = useState("");
   const supabaseReady = isSupabaseConfigured();
+  const demo = isDemoMode() && !supabaseReady;
 
   const { data: offers = [], isLoading } = useQuery({
-    queryKey: ["offers", card.id],
-    enabled: supabaseReady,
+    queryKey: ["offers", card.id, demo],
+    enabled: supabaseReady || demo,
     queryFn: async () => {
+      if (demo) {
+        return getDemoCardOffers(card.id, fx.USD);
+      }
       try {
         const { data, error } = await supabase.rpc("get_card_offers", { _card_id: card.id });
         if (error) return [];

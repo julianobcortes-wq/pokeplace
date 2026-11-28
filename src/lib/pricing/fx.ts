@@ -30,7 +30,7 @@ export async function getFxRates(): Promise<FxRates> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 2200);
   try {
-    const res = await fetch("https://api.frankfurter.app/latest?from=USD&to=BRL,EUR", { signal: ctrl.signal });
+    const res = await fetch("https://api.frankfurter.dev/v1/latest?from=USD&to=BRL,EUR", { signal: ctrl.signal });
     if (res.ok) {
       const body = (await res.json()) as { date?: string; rates?: { BRL?: number; EUR?: number } };
       const usdToBrl = Number(body.rates?.BRL);

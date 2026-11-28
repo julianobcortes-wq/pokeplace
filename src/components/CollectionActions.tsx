@@ -6,6 +6,13 @@ import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { dbTable } from "@/lib/supabase-ext";
+import { isSupabaseConfigured } from "@/lib/runtime-config";
+import { isDemoMode } from "@/lib/demo-mode";
+import {
+  addDemoAlert,
+  loadDemoCollection,
+  toggleDemoCollectionCard,
+} from "@/lib/demo-data";
 
 export function CollectionActions({
   cardId,
@@ -16,6 +23,7 @@ export function CollectionActions({
 }) {
   const { user } = useAuth();
   const qc = useQueryClient();
+  const demo = isDemoMode() && !isSupabaseConfigured();
   const [alertOpen, setAlertOpen] = useState(false);
   const [alertDir, setAlertDir] = useState<"below" | "above">("below");
   const [alertPrice, setAlertPrice] = useState(
@@ -24,9 +32,12 @@ export function CollectionActions({
   const [savingAlert, setSavingAlert] = useState(false);
 
   const { data = [] } = useQuery({
-    queryKey: ["collection-card", user?.id, cardId],
+    queryKey: ["collection-card", user?.id, cardId, demo],
     enabled: !!user,
     queryFn: async () => {
+      if (demo) {
+        return loadDemoCollection().filter((r) => r.card_id === cardId);
+      }
       const { data, error } = await supabase
         .from("collection_entries")
         .select("*")
@@ -38,6 +49,21 @@ export function CollectionActions({
 
   const toggle = async (kind: "owned" | "wanted") => {
     if (!user) return;
+    if (demo) {
+      const added = toggleDemoCollectionCard(cardId, kind);
+      toast.success(
+        added
+          ? kind === "owned"
+            ? "Salva no seu acervo (local)"
+            : "Adicionada à lista de desejos (local)"
+          : kind === "owned"
+            ? "Removida do seu acervo"
+            : "Removida da lista de desejos",
+      );
+      await qc.invalidateQueries({ queryKey: ["collection-card"] });
+      await qc.invalidateQueries({ queryKey: ["collection"] });
+      return;
+    }
     const row = data.find((r) => r.kind === kind);
     const { error } = row
       ? await supabase.from("collection_entries").delete().eq("id", row.id)
@@ -66,6 +92,13 @@ export function CollectionActions({
     const n = Number(alertPrice.replace(",", "."));
     if (!Number.isFinite(n) || n <= 0) {
       toast.error("Informe um preço-alvo válido em R$");
+      return;
+    }
+    if (demo) {
+      addDemoAlert(cardId, alertDir, Math.round(n * 100) / 100);
+      toast.success("Alerta de preço salvo localmente (modo demonstração).");
+      setAlertOpen(false);
+      qc.invalidateQueries({ queryKey: ["price-alerts"] });
       return;
     }
     setSavingAlert(true);

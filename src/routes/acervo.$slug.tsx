@@ -4,6 +4,8 @@ import { Layers, TrendingUp } from "lucide-react";
 import { PageShell } from "@/components/SiteHeader";
 import { dbRpc } from "@/lib/supabase-ext";
 import { isSupabaseConfigured } from "@/lib/runtime-config";
+import { isDemoMode } from "@/lib/demo-mode";
+import { getDemoPublicCollection } from "@/lib/demo-data";
 import { BRAND, money } from "@/lib/format";
 import { conditionAdjustedPrice } from "@/lib/marketplace/portfolio";
 
@@ -35,10 +37,14 @@ type PublicCardRow = {
 
 function PublicCollectionPage() {
   const { slug } = Route.useParams();
+  const demo = isDemoMode() && !isSupabaseConfigured();
   const { data = [], isPending } = useQuery({
-    queryKey: ["public-collection", slug],
-    enabled: isSupabaseConfigured(),
+    queryKey: ["public-collection", slug, demo],
+    enabled: isSupabaseConfigured() || demo,
     queryFn: async () => {
+      if (demo) {
+        return getDemoPublicCollection(slug) as PublicCardRow[];
+      }
       const { data, error } = await dbRpc<PublicCardRow[]>("get_public_collection", {
         _slug: slug,
       });

@@ -15,3 +15,4 @@ jobs:
       - run: bunx tsc --noEmit
       - run: bun run test
       - run: bun run build
+      - run: bun run build:pages

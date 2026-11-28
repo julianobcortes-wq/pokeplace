@@ -15,6 +15,7 @@ import { Toaster } from "../components/ui/sonner";
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
 import { getPublicRuntimeConfig } from "../lib/runtime-config";
+import { isDemoMode } from "../lib/demo-mode";
 
 function NotFoundComponent() {
   return (
@@ -65,7 +66,7 @@ function ErrorComponent({ error, reset }: ErrorComponentProps) {
             Tentar novamente
           </button>
           <a
-            href="/"
+            href={(import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? "/"}
             className="inline-flex items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent"
           >
             Voltar ao início
@@ -102,7 +103,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       },
       { rel: "preconnect", href: "https://fonts.googleapis.com" },
       { rel: "stylesheet", href: "https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" },
-      { rel: "icon", href: "/favicon.png", type: "image/png" },
+      { rel: "icon", href: `${(import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? "/"}favicon.png`, type: "image/png" },
     ],
   }),
   shellComponent: RootShell,
@@ -112,6 +113,9 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 });
 
 function RootShell({ children }: { children: ReactNode }) {
+  if (isDemoMode()) {
+    return <>{children}</>;
+  }
   return (
     <html lang="pt-BR">
       <head>

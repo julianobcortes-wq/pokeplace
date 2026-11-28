@@ -7,6 +7,8 @@ import { useAuth } from "@/hooks/useAuth";
 import { searchCards } from "@/lib/catalog.functions";
 import { BRAND } from "@/lib/format";
 import { supabase } from "@/integrations/supabase/client";
+import { isDemoMode } from "@/lib/demo-mode";
+import { isSupabaseConfigured } from "@/lib/runtime-config";
 import { Button } from "./ui/button";
 import logoCard from "@/assets/logo-card.png";
 
@@ -76,10 +78,17 @@ function ThemeToggle() {
 export function SiteHeader() {
   const { items } = useCart();
   const { user, isAdmin, roles } = useAuth();
+  const demo = isDemoMode() && !isSupabaseConfigured();
   const count = items.reduce((s, i) => s + i.qty, 0);
   const nav = "whitespace-nowrap rounded-full px-3 py-1.5 opacity-75 transition hover:bg-ink-foreground/10 hover:opacity-100 [&.active]:bg-ink-foreground/10 [&.active]:opacity-100";
   return (
     <header className="sticky top-0 z-30 bg-ink text-ink-foreground">
+      {demo && (
+        <div className="border-b border-ink-foreground/10 bg-ink-foreground/5 px-4 py-1 text-center text-[11px] text-ink-foreground/80">
+          <span className="mr-1.5 inline-block rounded-full bg-primary/20 px-2 py-0.5 font-semibold text-primary">Demo</span>
+          Catálogo real (3.864 cartas) e cotações TCGdex · Lojas, carrinho e coleção demonstrativos salvos no navegador
+        </div>
+      )}
       <div className="mx-auto flex max-w-7xl items-center gap-4 px-4 py-2 lg:gap-6">
         <Logo imgClass="h-11 lg:h-12" />
         <nav className="hidden items-center gap-1 text-sm lg:flex">
@@ -99,7 +108,7 @@ export function SiteHeader() {
               <NotificationBell userId={user.id} />
               <Link to="/pedidos" className={nav}>Pedidos</Link>
               <Link to="/conta" className={nav}>Conta</Link>
-              <Button variant="ghost" onClick={() => supabase.auth.signOut()} className={nav}>Sair</Button>
+              {!demo && <Button variant="ghost" onClick={() => supabase.auth.signOut()} className={nav}>Sair</Button>}
             </>
           ) : <Link to="/auth" className="whitespace-nowrap rounded-full bg-ink-foreground px-4 py-1.5 font-medium text-ink transition hover:opacity-90">Entrar</Link>}
           <Link to="/carrinho" aria-label="Carrinho" className="relative rounded-full p-2 hover:bg-ink-foreground/10">

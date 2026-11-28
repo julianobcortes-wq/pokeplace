@@ -2,13 +2,23 @@ import { useEffect, useState } from "react";
 import type { User } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
 import { isSupabaseConfigured } from "@/lib/runtime-config";
+import { DEMO_USER, isDemoMode } from "@/lib/demo-mode";
 
 export function useAuth() {
-  const [user, setUser] = useState<User | null>(null);
+  const demo = isDemoMode() && !isSupabaseConfigured();
+  const [user, setUser] = useState<User | null>(() =>
+    demo ? ({ id: DEMO_USER.id, email: DEMO_USER.email } as User) : null,
+  );
   const [roles, setRoles] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!demo);
 
   useEffect(() => {
+    if (demo) {
+      setUser({ id: DEMO_USER.id, email: DEMO_USER.email } as User);
+      setRoles([]);
+      setLoading(false);
+      return;
+    }
     if (!isSupabaseConfigured()) {
       setLoading(false);
       return;
@@ -24,7 +34,7 @@ export function useAuth() {
     supabase.auth.getUser().then(({ data }) => load(data.user)).catch(() => setLoading(false));
     const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => { load(s?.user ?? null); });
     return () => sub.subscription.unsubscribe();
-  }, []);
+  }, [demo]);
 
   return { user, roles, isAdmin: roles.includes("admin"), loading };
 }

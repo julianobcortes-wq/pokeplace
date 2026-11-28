@@ -5,6 +5,9 @@ import { OffersInbox } from "@/components/OffersInbox";
 import { PageShell } from "@/components/SiteHeader";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
+import { isSupabaseConfigured } from "@/lib/runtime-config";
+import { isDemoMode } from "@/lib/demo-mode";
+import { loadDemoOrders } from "@/lib/demo-data";
 import { BRAND, ORDER_STATUS, money } from "@/lib/format";
 
 export const Route = createFileRoute("/_authenticated/pedidos/")({
@@ -32,9 +35,11 @@ const STATUS_STYLE: Record<string, string> = {
 
 function Orders() {
   const { user } = useAuth();
+  const demo = isDemoMode() && !isSupabaseConfigured();
   const { data = [], isPending } = useQuery({
-    queryKey: ["my-orders"],
+    queryKey: ["my-orders", demo],
     queryFn: async () => {
+      if (demo) return loadDemoOrders();
       const { data: u } = await supabase.auth.getUser();
       if (!u.user) throw new Error("Entre para consultar seus pedidos");
       const { data } = await supabase.from("orders").select("*").eq("buyer_id", u.user.id).order("created_at", { ascending: false });

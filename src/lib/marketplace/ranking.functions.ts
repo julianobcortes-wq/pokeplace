@@ -2,6 +2,8 @@ import { createServerFn } from "@tanstack/react-start";
 import { publicDb } from "@/lib/public-db";
 import { localCard, localTrending, type LocalCard } from "@/lib/catalog/local";
 import { getTrends } from "@/lib/catalog.functions";
+import { isDemoMode } from "@/lib/demo-mode";
+import { getDemoBuyerRankings, getDemoSellerRankings } from "@/lib/demo-data";
 import {
   computeSellerThermometer,
   type BuyerTier,
@@ -99,7 +101,7 @@ const CARD_RANK_TTL_MS = 10 * 60 * 1000;
 export const getSellerRankings = createServerFn({ method: "GET" })
   .inputValidator((d: { state?: string | undefined; sort?: "score" | "sales" | "rating" | undefined; limit?: number | undefined }) => d)
   .handler(async ({ data }): Promise<RankedSeller[]> => {
-    if (!dbConfigured()) return [];
+    if (!dbConfigured()) return isDemoMode() ? getDemoSellerRankings(data) : [];
     const limit = Math.max(1, Math.min(data.limit ?? 50, 100));
     const sort = data.sort ?? "score";
     const state = data.state?.trim().toUpperCase() || null;
@@ -190,7 +192,7 @@ export const getSellerRankings = createServerFn({ method: "GET" })
 export const getBuyerRankings = createServerFn({ method: "GET" })
   .inputValidator((d: { limit?: number }) => d)
   .handler(async ({ data }): Promise<RankedBuyer[]> => {
-    if (!dbConfigured()) return [];
+    if (!dbConfigured()) return isDemoMode() ? getDemoBuyerRankings() : [];
     const limit = Math.max(1, Math.min(data.limit ?? 50, 100));
     try {
       const db = publicDb();

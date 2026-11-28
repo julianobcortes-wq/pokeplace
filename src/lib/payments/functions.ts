@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { isDemoMode } from "@/lib/demo-mode";
 import {
   createCheckoutPreference,
   fetchMercadoPagoPayment,
@@ -58,11 +59,20 @@ async function assertAdmin(ctx: Authed) {
 
 export const getPaymentOptions = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
-  .handler(async () => ({
-    mercadoPago: mercadoPagoConfigured() && mercadoPagoWebhookConfigured(),
-    mercadoPagoTokenReady: mercadoPagoConfigured(),
-    webhookSecretReady: mercadoPagoWebhookConfigured(),
-  }));
+  .handler(async () => {
+    if (isDemoMode()) {
+      return {
+        mercadoPago: false,
+        mercadoPagoTokenReady: false,
+        webhookSecretReady: false,
+      };
+    }
+    return {
+      mercadoPago: mercadoPagoConfigured() && mercadoPagoWebhookConfigured(),
+      mercadoPagoTokenReady: mercadoPagoConfigured(),
+      webhookSecretReady: mercadoPagoWebhookConfigured(),
+    };
+  });
 
 export const startMercadoPagoCheckout = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])

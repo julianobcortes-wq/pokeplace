@@ -23,6 +23,16 @@ import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import { dbRpc, dbTable } from "@/lib/supabase-ext";
 import { useAuth } from "@/hooks/useAuth";
+import { isSupabaseConfigured } from "@/lib/runtime-config";
+import { DEMO_USER, isDemoMode } from "@/lib/demo-mode";
+import {
+  deleteDemoAlert,
+  deleteDemoCollectionEntry,
+  loadDemoAlerts,
+  loadDemoCollectionWithCards,
+  toggleDemoAlert,
+  updateDemoCollectionEntry,
+} from "@/lib/demo-data";
 import { BRAND, CONDITIONS, money } from "@/lib/format";
 import {
   conditionAdjustedPrice,
@@ -77,6 +87,7 @@ type PriceAlertRow = {
 
 function Collection() {
   const { user } = useAuth();
+  const demo = isDemoMode() && !isSupabaseConfigured();
   const [tab, setTab] = useState<"owned" | "wanted" | "alerts">("owned");
   const [groupBySet, setGroupBySet] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
@@ -85,8 +96,11 @@ function Collection() {
   const qc = useQueryClient();
 
   const { data = [], isPending, isError } = useQuery({
-    queryKey: ["collection"],
+    queryKey: ["collection", demo],
     queryFn: async () => {
+      if (demo) {
+        return loadDemoCollectionWithCards() as unknown as RawEntry[];
+      }
       const { data, error } = await supabase
         .from("collection_entries")
         .select("*,cards(name,number,image_small,card_sets(name))")
@@ -97,9 +111,16 @@ function Collection() {
   });
 
   const { data: shareProfile } = useQuery({
-    queryKey: ["collection-share-profile", user?.id],
+    queryKey: ["collection-share-profile", user?.id, demo],
     enabled: !!user,
     queryFn: async () => {
+      if (demo) {
+        return {
+          display_name: DEMO_USER.displayName,
+          collection_public_opt_in: true,
+          collection_share_slug: "colecionador-demo",
+        };
+      }
       const { data } = await dbTable("profiles")
         .select("display_name,collection_public_opt_in,collection_share_slug")
         .eq("id", user!.id)
@@ -113,8 +134,8 @@ function Collection() {
   });
 
   const { data: wishlistMatches = [] } = useQuery({
-    queryKey: ["wishlist-matches", user?.id],
-    enabled: !!user,
+    queryKey: ["wishlist-matches", user?.id, demo],
+    enabled: !!user && !demo,
     queryFn: async () => {
       const { data, error } = await dbRpc<WishlistMatch[]>("get_wishlist_matches");
       if (error) return [];
@@ -123,9 +144,12 @@ function Collection() {
   });
 
   const { data: alerts = [] } = useQuery({
-    queryKey: ["price-alerts", user?.id],
+    queryKey: ["price-alerts", user?.id, demo],
     enabled: !!user,
     queryFn: async () => {
+      if (demo) {
+        return loadDemoAlerts() as unknown as PriceAlertRow[];
+      }
       const { data, error } = await dbTable("price_alerts")
         .select("id,card_id,direction,target_brl,active,last_triggered_at,cards(name,number,image_small)")
         .eq("user_id", user!.id)
@@ -172,6 +196,12 @@ function Collection() {
   );
 
   const remove = async (id: string) => {
+    if (demo) {
+      deleteDemoCollectionEntry(id);
+      toast.success("Carta removida da coleção local");
+      qc.invalidateQueries({ queryKey: ["collection"] });
+      return;
+    }
     const { error } = await supabase.from("collection_entries").delete().eq("id", id);
     if (error) toast.error(error.message);
     else {
@@ -181,6 +211,11 @@ function Collection() {
   };
 
   const toggleAlert = async (alert: PriceAlertRow) => {
+    if (demo) {
+      toggleDemoAlert(alert.id);
+      qc.invalidateQueries({ queryKey: ["price-alerts"] });
+      return;
+    }
     const { error } = await dbTable("price_alerts")
       .update({ active: !alert.active })
       .eq("id", alert.id);
@@ -189,6 +224,12 @@ function Collection() {
   };
 
   const deleteAlert = async (id: string) => {
+    if (demo) {
+      deleteDemoAlert(id);
+      toast.success("Alerta removido");
+      qc.invalidateQueries({ queryKey: ["price-alerts"] });
+      return;
+    }
     const { error } = await dbTable("price_alerts").delete().eq("id", id);
     if (error) toast.error(error.message);
     else {
@@ -214,6 +255,10 @@ function Collection() {
 
   const saveShareSettings = async (nextPublic: boolean) => {
     if (!user) return;
+    if (demo) {
+      toast.info("No modo demonstração, o acervo público de exemplo fica em /acervo/colecionador-demo.");
+      return;
+    }
     const cleanSlug = currentSlug.trim().toLowerCase();
     if (nextPublic) {
       const check = validateShareSlug(cleanSlug);
@@ -236,9 +281,10 @@ function Collection() {
     qc.invalidateQueries({ queryKey: ["collection-share-profile"] });
   };
 
+  const baseUrl = ((import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? "/").replace(/\/+$/, "");
   const shareUrl =
     typeof window !== "undefined" && shareProfile?.collection_share_slug
-      ? `${window.location.origin}/acervo/${shareProfile.collection_share_slug}`
+      ? `${window.location.origin}${baseUrl}/acervo/${shareProfile.collection_share_slug}`
       : "";
 
   const visible = useMemo(
@@ -641,6 +687,7 @@ function CollectionCard({
 
 function EntryEditor({ row }: { row: RawEntry }) {
   const qc = useQueryClient();
+  const demo = isDemoMode() && !isSupabaseConfigured();
   const [qty, setQty] = useState(String(row.quantity || 1));
   const [cond, setCond] = useState(row.condition ?? "NM");
   const [cost, setCost] = useState(row.purchase_price == null ? "" : String(row.purchase_price));
@@ -656,6 +703,12 @@ function EntryEditor({ row }: { row: RawEntry }) {
       const cNum = cost.trim() ? Number(cost.replace(",", ".")) : null;
       if (cNum != null && (!Number.isFinite(cNum) || cNum < 0)) {
         toast.error("Custo de aquisição inválido");
+        return;
+      }
+      if (demo) {
+        updateDemoCollectionEntry(row.id, { quantity: qNum, condition: cond, purchase_price: cNum });
+        toast.success("Carta atualizada localmente");
+        qc.invalidateQueries({ queryKey: ["collection"] });
         return;
       }
       let res = await dbTable("collection_entries")
@@ -675,6 +728,12 @@ function EntryEditor({ row }: { row: RawEntry }) {
     const tNum = target.trim() ? Number(target.replace(",", ".")) : null;
     if (tNum != null && (!Number.isFinite(tNum) || tNum <= 0)) {
       toast.error("Informe um preço-alvo positivo");
+      return;
+    }
+    if (demo) {
+      updateDemoCollectionEntry(row.id, { target_price: tNum });
+      toast.success("Meta salva localmente");
+      qc.invalidateQueries({ queryKey: ["collection"] });
       return;
     }
     const { error } = await supabase.from("collection_entries").update({ target_price: tNum }).eq("id", row.id);
